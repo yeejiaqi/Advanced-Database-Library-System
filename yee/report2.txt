@@ -1,0 +1,116 @@
+--REPORT 2: detail report of facility booking failure analysis--
+
+
+-- Helper function to validate month/year
+CREATE OR REPLACE FUNCTION fn_validate_year (
+    p_year IN PLS_INTEGER
+) RETURN BOOLEAN IS
+BEGIN
+    RETURN p_year BETWEEN 2019 AND EXTRACT(YEAR FROM SYSDATE);
+END fn_validate_year;
+/
+
+
+
+-- Main report procedure
+CREATE OR REPLACE PROCEDURE rp_FacBkgFailureByYear (
+    p_year IN PLS_INTEGER
+) IS
+    -- Specific exception for invalid year
+    e_invalid_year EXCEPTION;
+    PRAGMA EXCEPTION_INIT(e_invalid_year, -20051);
+
+    -- Cursor to aggregate failures by facility type
+    CURSOR c_types IS
+      SELECT 
+          f.FacilityType,
+          SUM(CASE WHEN fb.BookingStatus = 'CANCELLED' THEN 1 ELSE 0 END) AS cnt_cancelled,
+          SUM(CASE WHEN fb.BookingStatus = 'EXPIRED'   THEN 1 ELSE 0 END) AS cnt_expired,
+          SUM(CASE WHEN fb.BookingStatus = 'FAILED'    THEN 1 ELSE 0 END) AS cnt_failed,
+          (SUM(CASE WHEN fb.BookingStatus = 'CANCELLED' THEN 1 ELSE 0 END) +
+           SUM(CASE WHEN fb.BookingStatus = 'EXPIRED'   THEN 1 ELSE 0 END) +
+           SUM(CASE WHEN fb.BookingStatus = 'FAILED'    THEN 1 ELSE 0 END)) AS total_fail
+      FROM Facility f
+      JOIN FacilityBooking fb ON f.FacilityID = fb.FacilityID
+      WHERE EXTRACT(YEAR FROM fb.BookingDate) = p_year
+      GROUP BY f.FacilityType
+      HAVING (SUM(CASE WHEN fb.BookingStatus = 'CANCELLED' THEN 1 ELSE 0 END) +
+              SUM(CASE WHEN fb.BookingStatus = 'EXPIRED'   THEN 1 ELSE 0 END) +
+              SUM(CASE WHEN fb.BookingStatus = 'FAILED'    THEN 1 ELSE 0 END)) > 0
+      ORDER BY total_fail DESC;  
+
+    -- Loop variables and grand‑total accumulators
+    v_type_rec       c_types%ROWTYPE;
+    v_sum_cancelled  NUMBER := 0;
+    v_sum_expired    NUMBER := 0;
+    v_sum_failed     NUMBER := 0;
+    v_sum_all        NUMBER := 0;
+
+    -- For default exception handler
+    v_ErrorMessage   VARCHAR2(4000);
+BEGIN
+    -- Validate the year
+    IF NOT fn_validate_year(p_year) THEN
+        RAISE e_invalid_year;
+    END IF;
+
+    -- Header
+    DBMS_OUTPUT.PUT_LINE(CHR(10));
+    DBMS_OUTPUT.PUT_LINE('-------- Annual Report Of Facility Booking Failures for ' || p_year || ' --------');
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',80,'='));
+    DBMS_OUTPUT.PUT_LINE(
+      RPAD('Facility Type',20)
+      || RPAD('Cancelled',16)
+      || RPAD('Expired',16)
+      || RPAD('Failed',16)
+      || 'Total (by type)'
+    );
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',80,'='));
+
+    -- Fetch and display each type
+    OPEN c_types;
+    LOOP
+      FETCH c_types INTO v_type_rec;
+      EXIT WHEN c_types%NOTFOUND;
+
+      v_sum_cancelled := v_sum_cancelled + v_type_rec.cnt_cancelled;
+      v_sum_expired   := v_sum_expired   + v_type_rec.cnt_expired;
+      v_sum_failed    := v_sum_failed    + v_type_rec.cnt_failed;
+      v_sum_all       := v_sum_all       + v_type_rec.total_fail;
+
+      DBMS_OUTPUT.PUT_LINE(
+        RPAD(v_type_rec.FacilityType,22)
+        || RPAD(v_type_rec.cnt_cancelled,16)
+        || RPAD(v_type_rec.cnt_expired,16)
+        || RPAD(v_type_rec.cnt_failed,16)
+        || v_type_rec.total_fail
+      );
+    END LOOP;
+    CLOSE c_types;
+
+    -- Grand total footer
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',80,'='));
+    DBMS_OUTPUT.PUT_LINE(
+      RPAD('TOTAL',8)
+      || LPAD(v_sum_cancelled,16)
+      || LPAD(v_sum_expired,16)
+      || LPAD(v_sum_failed,15)
+      || LPAD(v_sum_all,16)
+    );
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 80, '='));
+
+EXCEPTION
+    WHEN e_invalid_year THEN
+        -- Specific error for invalid input
+        RAISE_APPLICATION_ERROR(
+          -20051,
+          'Invalid year: must be between 2019 and ' || EXTRACT(YEAR FROM SYSDATE)
+        );
+
+    WHEN OTHERS THEN
+        -- Default exception
+        v_ErrorMessage := SQLERRM;
+        DBMS_OUTPUT.PUT_LINE('Error occurred: ' || v_ErrorMessage);
+        RAISE;
+END rp_FacBkgFailureByYear;
+/

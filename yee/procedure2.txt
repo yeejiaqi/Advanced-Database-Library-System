@@ -1,0 +1,68 @@
+--PROCEDURE 2: check out booking--
+
+CREATE OR REPLACE PROCEDURE CheckOutBooking (
+    p_FBookingID         IN FacilityBooking.FBookingID%TYPE,
+    p_PostUsageCondition IN FacilityBooking.FacilityPostUsageCondition%TYPE
+)
+AS
+    -- Custom exceptions
+    e_not_found           EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_not_found, -20001);
+    e_not_today           EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_not_today, -20002);
+    e_not_checked_in      EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_not_checked_in, -20003);
+    e_invalid_condition   EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_invalid_condition, -20004);
+
+    -- Locals
+    v_booking_date  FacilityBooking.BookingDate%TYPE;
+    v_checkin       FacilityBooking.CheckInTime%TYPE;
+    v_cond          VARCHAR2(20);
+BEGIN
+    -- Load and validate the booking row
+    SELECT BookingDate, CheckInTime
+      INTO v_booking_date, v_checkin
+      FROM FacilityBooking
+     WHERE FBookingID = p_FBookingID;
+
+    -- Must be for today
+    IF TRUNC(v_booking_date) <> TRUNC(SYSDATE) THEN
+        RAISE e_not_today;
+    END IF;
+
+    -- Must have checked in
+    IF v_checkin IS NULL THEN
+        RAISE e_not_checked_in;
+    END IF;
+
+    -- Validate post-usage condition
+    v_cond := UPPER(TRIM(p_PostUsageCondition));
+    IF v_cond NOT IN ('GOOD','DEFECTIVE','DIRTY') THEN
+        RAISE e_invalid_condition;
+    END IF;
+
+    -- Perform the checkout update, set status to COMPLETED
+    UPDATE FacilityBooking
+       SET CheckOutTime = SYSTIMESTAMP,
+           BookingStatus = 'COMPLETED',
+           FacilityPostUsageCondition = v_cond
+     WHERE FBookingID = p_FBookingID;
+
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Checkout successful for '||p_FBookingID);
+
+EXCEPTION
+    WHEN NO_DATA_FOUND
+    OR e_not_found THEN
+        RAISE_APPLICATION_ERROR(-20001,'Booking ID '||p_FBookingID||' not found.');
+    WHEN e_not_today THEN
+        RAISE_APPLICATION_ERROR(-20002,'cannot check out booking that is not for today.');
+    WHEN e_not_checked_in THEN
+        RAISE_APPLICATION_ERROR(-20003,'Cannot check out: user has not checked in or not currently in-progress.');
+    WHEN e_invalid_condition THEN
+        RAISE_APPLICATION_ERROR(-20004,'Invalid post-usage condition; allowed: GOOD, DEFECTIVE, DIRTY.');
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20099,'Unexpected error '||SQLCODE||': '||SUBSTR(SQLERRM,1,200));
+END CheckOutBooking;
+/

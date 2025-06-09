@@ -1,0 +1,33 @@
+DROP TABLE BorrowDetails;
+CREATE TABLE BorrowDetails(
+    BorrowID                    CHAR(7)                NOT NULL,
+    BookCopyID                  CHAR(7)                NOT NULL,
+    OriBookLoanDueDate          DATE                   DEFAULT SYSDATE + 7 NOT NULL,
+    LatestBookLoanDueDate       DATE                   DEFAULT SYSDATE + 7 NOT NULL,
+    ReturnDate                  DATE,
+    ReturnCondition             VARCHAR2(8),
+    BorrowStatus                VARCHAR2(10)            DEFAULT 'BORROWED' NOT NULL,
+    FineID                      CHAR(7),
+    CONSTRAINT pk_bd PRIMARY KEY(BorrowID, BookCopyID),
+    CONSTRAINT fk_bd_borrowID FOREIGN KEY (BorrowID) REFERENCES Borrow(BorrowID),
+    CONSTRAINT fk_bd_bookCopyID FOREIGN KEY (BookCopyID) REFERENCES BookCopy(BookCopyID),
+    CONSTRAINT fk_bd_fineID FOREIGN KEY (FineID) REFERENCES Fine(FineID),
+    CONSTRAINT chk_bd_latestBookDueDate CHECK ((LatestBookLoanDueDate = OriBookLoanDueDate) OR (LatestBookLoanDueDate = OriBookLoanDueDate + 7) OR (LatestBookLoanDueDate = OriBookLoanDueDate + 14)),
+    CONSTRAINT chk_bd_returnDate CHECK ( (ReturnDate IS NULL AND ReturnCondition IS NULL) OR (ReturnDate IS NOT NULL AND ReturnCondition IS NOT NULL) ),
+    CONSTRAINT chk_bd_returnCondition CHECK (((ReturnCondition IN ('GOOD','LIGHTDMG','HEAVYDMG','LOST')) AND (ReturnDate IS NOT NULL)) OR (ReturnCondition IS NULL AND ReturnDate IS NULL)), 
+    CONSTRAINT chk_bd_borrowStatus CHECK (
+        (BorrowStatus IN ('BORROWED','OVERDUE','RETURNED', 'LATERETURN')) AND 
+        (   (  (ReturnDate IS NULL) AND 
+                ( (BorrowStatus = 'BORROWED') OR (BorrowStatus = 'OVERDUE') )  ) 
+            OR 
+            (  (ReturnDate IS NOT NULL) AND 
+                ( 
+                    (ReturnDate <= LatestBookLoanDueDate AND BorrowStatus = 'RETURNED') OR 
+                    (ReturnDate > LatestBookLoanDueDate AND BorrowStatus = 'LATERETURN') 
+                )  
+            )
+        )
+    )
+);
+
+

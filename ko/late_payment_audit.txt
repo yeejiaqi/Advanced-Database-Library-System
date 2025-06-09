@@ -1,0 +1,11 @@
+DROP TABLE LatePaymentAudit;
+
+CREATE TABLE LatePaymentAudit
+(    FineID                 CHAR(7)         NOT NULL,
+     RecalculateDate        DATE            DEFAULT SYSDATE         NOT NULL,
+     OldFineCharged         NUMBER(7,2)     DEFAULT 0               NOT NULL,
+     NewFineCharged         NUMBER(7,2)     DEFAULT 0               NOT NULL,
+     OldFineReason          VARCHAR2(33)    NULL,
+     NewFineReason          VARCHAR2(33)    NULL,
+     PRIMARY KEY (FineID, RecalculateDate)
+);

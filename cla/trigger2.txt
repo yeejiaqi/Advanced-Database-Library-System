@@ -1,0 +1,52 @@
+CREATE OR REPLACE TRIGGER trg_create_membership_activity
+AFTER INSERT ON LibraryUser
+FOR EACH ROW
+DECLARE
+  v_nextActivityID   VARCHAR2(7);
+  v_nextPaymentID    VARCHAR2(7);
+  v_newExpiry        DATE;
+  v_newMaxBook       NUMBER(2,0);
+  v_fee              NUMBER(4,2);
+BEGIN
+  -- Generate next MembershipActivityID
+  SELECT 'MA' || LPAD(NVL(MAX(TO_NUMBER(SUBSTR(MembershipActivityID, 3))), 0) + 1, 5, '0')
+  INTO v_nextActivityID
+  FROM MembershipActivity;
+
+  -- Generate next PaymentID
+  SELECT 'PY' || LPAD(NVL(MAX(TO_NUMBER(SUBSTR(PaymentID, 3))), 0) + 1, 5, '0')
+  INTO v_nextPaymentID
+  FROM MembershipActivity;
+
+  -- Add 1 year to registration date
+  v_newExpiry := ADD_MONTHS(:NEW.UserRegistrationDate, 12);
+
+  -- Determine max books and fee
+  CASE :NEW.MembershipType
+    WHEN 'BASIC' THEN
+      v_newMaxBook := 3;
+      v_fee := 5;
+    WHEN 'STANDARD' THEN
+      v_newMaxBook := 6;
+      v_fee := 10;
+    WHEN 'PREMIUM' THEN
+      v_newMaxBook := 10;
+      v_fee := 15;
+    ELSE
+      v_newMaxBook := 2;
+      v_fee := 0;
+  END CASE;
+
+  -- Insert new membership activity
+  INSERT INTO MembershipActivity (
+    MembershipActivityID, UserID, PaymentID, ActivityName, ActivityDate,
+    InitialMembershipType, CurrentMembershipType, OldExpiryDate, NewExpiryDate,
+    OldMaxBookAllowed, NewMaxBookAllowed, FeeCharged
+  )
+  VALUES (
+    v_nextActivityID, :NEW.UserID, v_nextPaymentID, 'REGISTER',
+    :NEW.UserRegistrationDate, 'NONE', :NEW.MembershipType, NULL, v_newExpiry,
+    2, v_newMaxBook, v_fee
+  );
+END;
+/

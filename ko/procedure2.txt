@@ -1,0 +1,121 @@
+SET SERVEROUTPUT ON
+SET LINESIZE 200
+cl scr
+CREATE OR REPLACE PROCEDURE checkFine(v_userID IN LibraryUser.UserID%TYPE)
+IS
+    CURSOR pending_fine_cursor IS
+        SELECT F.FineID, FineReason, FineIssuedDate, FineDueDate, FineCharged, FineDiscountAmount, TotalFineToBePaid, FineStatus 
+        FROM Fine F JOIN BorrowDetails D ON F.FineID = D.FineID
+        JOIN Borrow B ON D.BorrowID = B.BorrowID
+        WHERE B.UserID = v_userID AND FineStatus='PENDING';
+    pending_fine_rec pending_fine_cursor%ROWTYPE;
+
+    CURSOR overdue_fine_cursor IS
+        SELECT F.FineID, FineReason, FineIssuedDate, FineDueDate, FineCharged, FineDiscountAmount, TotalFineToBePaid, FineStatus 
+        FROM Fine F JOIN BorrowDetails D ON F.FineID = D.FineID
+        JOIN Borrow B ON D.BorrowID = B.BorrowID
+        WHERE B.UserID = v_userID AND FineStatus='OVERDUE';
+    overdue_fine_rec overdue_fine_cursor%ROWTYPE;
+
+    CURSOR settled_waived_fine_cursor IS
+        SELECT F.FineID, FineReason, FineIssuedDate, FineDueDate, FineCharged, FineDiscountAmount, TotalFineToBePaid, FineStatus 
+        FROM Fine F JOIN BorrowDetails D ON F.FineID = D.FineID
+        JOIN Borrow B ON D.BorrowID = B.BorrowID
+        WHERE B.UserID = v_userID AND (FineStatus='SETTLED' OR FineStatus='WAIVED');
+    settled_waived_fine_rec settled_waived_fine_cursor%ROWTYPE;
+
+    CURSOR cancelled_fine_cursor IS
+        SELECT F.FineID, FineReason, FineIssuedDate, FineDueDate, FineCharged, FineDiscountAmount, TotalFineToBePaid, FineStatus 
+        FROM Fine F JOIN BorrowDetails D ON F.FineID = D.FineID
+        JOIN Borrow B ON D.BorrowID = B.BorrowID
+        WHERE B.UserID = v_userID AND FineStatus='CANCELLED';
+    cancelled_fine_rec cancelled_fine_cursor%ROWTYPE;
+
+    v_validID LibraryUser.UserID%TYPE :=NULL;
+
+
+BEGIN
+    BEGIN
+        SELECT UserID INTO v_validID FROM LibraryUser WHERE UserID=v_userID;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+            DBMS_OUTPUT.PUT_LINE('Not a valid user.');
+    END;
+    IF v_validID IS NOT NULL THEN
+        DBMS_OUTPUT.PUT_LINE('User '||v_userID||' Fine Records');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+
+        DBMS_OUTPUT.PUT_LINE('Pending Payment');
+        DBMS_OUTPUT.PUT_LINE('_____________________________________________________________________________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE('|Fine ID  |Fine Reason                          |Issued Date|Due Date   |Fine Charged (RM)|Mem Discount (RM)|Total To Be Paid (RM)|Fine Status      |');
+        DBMS_OUTPUT.PUT_LINE('-----------------------------------------------------------------------------------------------------------------------------------------------------');
+        OPEN pending_fine_cursor;
+        FETCH pending_fine_cursor INTO pending_fine_rec;
+        WHILE pending_fine_cursor%FOUND
+        LOOP
+            DBMS_OUTPUT.PUT_LINE(' | '||pending_fine_rec.FineID||' | '||RPAD(pending_fine_rec.FineReason,35)||
+            ' | '||pending_fine_rec.FineIssuedDate||' | '||pending_fine_rec.FineDueDate||' | '||
+            RPAD(TO_CHAR(pending_fine_rec.FineCharged, '990.00'),15)|| ' | '|| RPAD(TO_CHAR(pending_fine_rec.FineDiscountAmount, '990.00'),15) ||' | '
+            || RPAD(TO_CHAR(pending_fine_rec.TotalFineToBePaid, '990.00'),19)|| ' | '||RPAD(pending_fine_rec.FineStatus,15)||' | ');
+
+            FETCH pending_fine_cursor INTO pending_fine_rec;
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('|_________|_____________________________________|___________|___________|_________________|_________________|_____________________|_________________|');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+
+        DBMS_OUTPUT.PUT_LINE('Overdue Fine');
+        DBMS_OUTPUT.PUT_LINE('_____________________________________________________________________________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE('|Fine ID  |Fine Reason                          |Issued Date|Due Date   |Fine Charged (RM)|Mem Discount (RM)|Total To Be Paid (RM)|Fine Status      |');
+        DBMS_OUTPUT.PUT_LINE('-----------------------------------------------------------------------------------------------------------------------------------------------------');
+        OPEN overdue_fine_cursor;
+        FETCH overdue_fine_cursor INTO overdue_fine_rec;
+        WHILE overdue_fine_cursor%FOUND
+        LOOP
+            DBMS_OUTPUT.PUT_LINE(' | '||overdue_fine_rec.FineID||' | '||RPAD(overdue_fine_rec.FineReason,35)||
+            ' | '||overdue_fine_rec.FineIssuedDate||' | '||overdue_fine_rec.FineDueDate||' | '||
+            RPAD(TO_CHAR(overdue_fine_rec.FineCharged, '990.00'),15)|| ' | '|| RPAD(TO_CHAR(overdue_fine_rec.FineDiscountAmount, '990.00'),15) ||' | '
+            || RPAD(TO_CHAR(overdue_fine_rec.TotalFineToBePaid, '990.00'),19)|| ' | '||RPAD(overdue_fine_rec.FineStatus,15)||' | ');
+
+            FETCH overdue_fine_cursor INTO overdue_fine_rec;
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('|_________|_____________________________________|___________|___________|_________________|_________________|_____________________|_________________|');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+        
+        DBMS_OUTPUT.PUT_LINE('Settled or Waived Fine');
+        DBMS_OUTPUT.PUT_LINE('_____________________________________________________________________________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE('|Fine ID  |Fine Reason                          |Issued Date|Due Date   |Fine Charged (RM)|Mem Discount (RM)|Total To Be Paid (RM)|Fine Status      |');
+        DBMS_OUTPUT.PUT_LINE('-----------------------------------------------------------------------------------------------------------------------------------------------------');
+        OPEN settled_waived_fine_cursor;
+        FETCH settled_waived_fine_cursor INTO settled_waived_fine_rec;
+        WHILE settled_waived_fine_cursor%FOUND
+        LOOP
+            DBMS_OUTPUT.PUT_LINE(' | '||settled_waived_fine_rec.FineID||' | '||RPAD(settled_waived_fine_rec.FineReason,35)||
+            ' | '||settled_waived_fine_rec.FineIssuedDate||' | '||settled_waived_fine_rec.FineDueDate||' | '||
+            RPAD(TO_CHAR(settled_waived_fine_rec.FineCharged, '990.00'),15)|| ' | '|| RPAD(TO_CHAR(settled_waived_fine_rec.FineDiscountAmount, '990.00'),15) ||' | '
+            || RPAD(TO_CHAR(settled_waived_fine_rec.TotalFineToBePaid, '990.00'),19)|| ' | '||RPAD(settled_waived_fine_rec.FineStatus,15)||' | ');
+
+            FETCH settled_waived_fine_cursor INTO settled_waived_fine_rec;
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('|_________|_____________________________________|___________|___________|_________________|_________________|_____________________|_________________|');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+        
+        DBMS_OUTPUT.PUT_LINE('Cancelled Fine');
+        DBMS_OUTPUT.PUT_LINE('_____________________________________________________________________________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE('|Fine ID  |Fine Reason                          |Issued Date|Due Date   |Fine Charged (RM)|Mem Discount (RM)|Total To Be Paid (RM)|Fine Status      |');
+        DBMS_OUTPUT.PUT_LINE('-----------------------------------------------------------------------------------------------------------------------------------------------------');
+        OPEN cancelled_fine_cursor;
+        FETCH cancelled_fine_cursor INTO cancelled_fine_rec;
+        WHILE cancelled_fine_cursor%FOUND
+        LOOP
+            DBMS_OUTPUT.PUT_LINE(' | '||cancelled_fine_rec.FineID||' | '||RPAD(cancelled_fine_rec.FineReason,35)||
+            ' | '||cancelled_fine_rec.FineIssuedDate||' | '||cancelled_fine_rec.FineDueDate||' | '||
+            RPAD(TO_CHAR(cancelled_fine_rec.FineCharged, '990.00'),15)|| ' | '|| RPAD(TO_CHAR(cancelled_fine_rec.FineDiscountAmount, '990.00'),15) ||' | '
+            || RPAD(TO_CHAR(cancelled_fine_rec.TotalFineToBePaid, '990.00'),19)|| ' | '||RPAD(cancelled_fine_rec.FineStatus,15)||' | ');
+
+            FETCH cancelled_fine_cursor INTO cancelled_fine_rec;
+        END LOOP;
+        DBMS_OUTPUT.PUT_LINE('|_________|_____________________________________|___________|___________|_________________|_________________|_____________________|_________________|');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+    END IF;
+END;
+/

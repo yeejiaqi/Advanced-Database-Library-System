@@ -1,0 +1,28 @@
+-- Index
+CREATE INDEX idx_bc_bookid ON BookCopy(BookID);
+
+-- View
+CREATE OR REPLACE VIEW v_BookCopyAvailable AS
+SELECT b.Genre,b.BookID,b.BookTitle,COUNT(bc.BookCopyID) AS TotalCopies
+FROM BookCopy bc
+JOIN Book b ON bc.BookID=b.BookID
+WHERE bc.BookCondition='GOOD' AND bc.BookStatus='AVAILABLE'
+GROUP BY b.Genre,b.BookID,b.BookTitle;
+
+-- Display
+SET LINESIZE 90 
+SET PAGESIZE 40
+SET NEWPAGE 1
+TTITLE LEFT '                 Books Available in Library' - 
+      LEFT 'Page' FORMAT 99 SQL.PNO SKIP 2 
+BREAK ON Genre SKIP PAGE
+
+COLUMN Genre       FORMAT A15   HEADING 'Genre'
+COLUMN BookID      FORMAT A7    HEADING 'Book ID'
+COLUMN BookTitle   FORMAT A30   HEADING 'Title' 
+COLUMN TotalCopies FORMAT 9999   HEADING 'Available Copies'
+
+SELECT Genre,BookID,BookTitle,TotalCopies
+FROM v_BookCopyAvailable
+ORDER BY Genre,TotalCopies DESC;
+TTITLE OFF

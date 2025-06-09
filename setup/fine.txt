@@ -1,0 +1,25 @@
+DROP TABLE Fine;
+CREATE TABLE Fine(
+        FineID              CHAR(7)         NOT NULL,
+        FineType            VARCHAR2(13)    NOT NULL,
+        FineReason          VARCHAR2(33)    NULL,
+        FineIssuedDate      DATE            DEFAULT SYSDATE         NOT NULL,
+        FineDueDate         DATE            DEFAULT SYSDATE+7       NOT NULL,
+        FineCharged         NUMBER(7,2)     DEFAULT 0               NOT NULL,
+        FineDiscountAmount  NUMBER(7,2)     DEFAULT 0               NOT NULL,
+        TotalFineToBePaid   NUMBER(7,2)     DEFAULT 0               NOT NULL,
+        FineStatus          VARCHAR2(9)     DEFAULT 'PENDING'        NOT NULL,
+        PaymentID           CHAR(7)         UNIQUE                  NULL,
+        CONSTRAINT chk_fine_pk PRIMARY KEY(FineID),
+        CONSTRAINT chk_fine_paymentID_fk FOREIGN KEY(PaymentID) REFERENCES Payment(PaymentID),
+        CONSTRAINT chk_fnID CHECK (REGEXP_LIKE(FineID, '^FN([0-9]{5})+$')),
+        CONSTRAINT chk_fine_type CHECK (FineType IN ('BOOKFINE','ROOMFINE')),
+        CONSTRAINT chk_fine_reason CHECK ((FineStatus='CANCELLED' AND FineReason IS NULL)OR(FineStatus!='CANCELLED' AND FineReason IS NOT NULL AND FineReason IN('OVERDUE','CONDITION','OVERDUE+CONDITION','CONDITION+LATE_FINE_REPAY','OVERDUE+LATE_FINE_REPAY','OVERDUE+CONDITION+LATE_FINE_REPAY'))),
+        CONSTRAINT chk_fine_due_date CHECK (FineDueDate = FineIssuedDate+7),
+        CONSTRAINT chk_fine_charged CHECK ((FineCharged > 0 AND (FineStatus = 'SETTLED' OR FineStatus = 'PENDING' OR FineStatus = 'WAIVED' OR FineStatus = 'OVERDUE')) OR (FineCharged = 0 AND FineStatus = 'CANCELLED')),
+        CONSTRAINT chk_fine_discount CHECK ((FineDiscountAmount >= 0 AND FineDiscountAmount < FineCharged AND (FineStatus = 'SETTLED' OR FineStatus = 'PENDING' OR FineStatus = 'OVERDUE')) OR (FineDiscountAmount = 0 AND FineStatus = 'CANCELLED') OR (FineDiscountAmount>=FineCharged AND FineCharged>0 AND FineStatus = 'WAIVED')),
+        CONSTRAINT chk_totalFineToBePaid CHECK ((TotalFineToBePaid > 0 AND TotalFineToBePaid = (FineCharged - FineDiscountAmount) AND (FineStatus = 'SETTLED' OR FineStatus = 'PENDING' OR FineStatus = 'OVERDUE')) OR (TotalFineToBePaid = 0 AND (FineStatus = 'CANCELLED' OR FineStatus = 'WAIVED'))),
+        CONSTRAINT chk_fineStatus CHECK (FineStatus IN ('SETTLED', 'PENDING', 'WAIVED', 'CANCELLED','OVERDUE')),
+        CONSTRAINT chk_fine_paid CHECK (((FineStatus = 'SETTLED' OR FineStatus = 'OVERDUE') AND PaymentID IS NOT NULL) OR ((FineStatus = 'PENDING' OR FineStatus = 'CANCELLED' OR FineStatus = 'WAIVED') AND PaymentID IS NULL))
+);
+

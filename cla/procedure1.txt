@@ -1,0 +1,156 @@
+DECLARE
+  v_nextActivityID NUMBER;
+BEGIN
+  -- Get next ID from MembershipActivity table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(MembershipActivityID, 3, 5))), 0) + 1 
+  INTO v_nextActivityID 
+  FROM MembershipActivity;
+
+  -- Drop the existing sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_membership_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN -- ORA-02289: sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create new sequence starting at next available ID
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_membership_id START WITH ' || v_nextActivityID || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+
+DECLARE
+  v_nextPaymentID NUMBER;
+BEGIN
+  -- Get next ID from Payment table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(PaymentID, 3, 5))), 0) + 1 
+  INTO v_nextPaymentID 
+  FROM Payment;
+
+  -- Drop the existing sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_payment_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN -- ORA-02289: sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create new sequence starting at next available ID
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_payment_id START WITH ' || v_nextPaymentID || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+
+SET SERVEROUTPUT ON;
+CREATE OR REPLACE PROCEDURE UpgradeMembership (
+  p_userID IN CHAR,
+  p_newMembershipType IN VARCHAR2,
+  p_paymentMethod IN VARCHAR2
+)
+IS
+  v_userStatus     VARCHAR2(11);
+  v_currentType    VARCHAR2(8);
+  v_oldExpiry      DATE;
+  v_newExpiry      DATE;
+  v_activityID     VARCHAR2(7);
+  v_paymentID      VARCHAR2(7);
+  v_activityDate   DATE := SYSDATE;
+  v_oldMax         NUMBER(2,0);
+  v_newMax         NUMBER(2,0);
+  v_fee            NUMBER(4,2);
+  v_blacklistFound BOOLEAN := FALSE;
+BEGIN
+  -- Validate payment method
+  IF UPPER(p_paymentMethod) NOT IN ('CASH', 'CARD', 'BANK', 'E-WALLET') THEN 
+    RAISE_APPLICATION_ERROR(-20010, 'Invalid payment method.'); 
+  END IF;
+
+  -- Check if user has overdue pending fines > 14 days
+  SELECT CASE WHEN COUNT(*) > 0 THEN 'Y' ELSE 'N' END
+  INTO v_userStatus
+  FROM Fine f
+  JOIN BorrowDetails bd ON f.FineID = bd.FineID
+  JOIN Borrow b ON bd.BorrowID = b.BorrowID
+  WHERE b.UserID = p_userID
+    AND f.FineStatus = 'PENDING'
+    AND SYSDATE > f.FineDueDate + 14;
+
+  IF v_userStatus = 'Y' THEN
+    UPDATE LibraryUser
+    SET UserAccountStatus = 'BLACKLISTED'
+    WHERE UserID = p_userID;
+    COMMIT;  -- Force commit the update
+    RAISE_APPLICATION_ERROR(-20011, 'User is blacklisted due to unpaid fines overdue more than 14 days.');
+  END IF;
+
+  -- Get user status and membership
+  SELECT UserAccountStatus, MembershipType, MembershipExpiry
+  INTO v_userStatus, v_currentType, v_oldExpiry
+  FROM LibraryUser
+  WHERE UserID = p_userID;
+
+  -- Disallow upgrade for blacklisted/terminated
+  IF v_userStatus IN ('BLACKLISTED', 'TERMINATED') THEN
+    RAISE_APPLICATION_ERROR(-20012, 'User is not eligible for upgrade (status: ' || v_userStatus || ').');
+  END IF;
+
+  -- Prevent upgrading from PREMIUM
+  IF v_currentType = 'PREMIUM' THEN
+    RAISE_APPLICATION_ERROR(-20002, 'User already has the highest membership (PREMIUM).');
+  END IF;
+
+  -- Determine valid upgrade path
+  IF v_currentType = 'BASIC' AND p_newMembershipType = 'STANDARD' THEN
+    v_oldMax := 3; v_newMax := 6; v_fee := 10;
+  ELSIF v_currentType = 'STANDARD' AND p_newMembershipType = 'PREMIUM' THEN
+    v_oldMax := 6; v_newMax := 10; v_fee := 15;
+  ELSIF v_currentType = 'BASIC' AND p_newMembershipType = 'PREMIUM' THEN
+    v_oldMax := 3; v_newMax := 10; v_fee := 15;
+  ELSE
+    RAISE_APPLICATION_ERROR(-20003, 'Invalid upgrade path.');
+  END IF;
+
+  -- Set expiry
+  v_newExpiry := ADD_MONTHS(v_activityDate, 12);
+
+  -- Generate IDs
+  SELECT 'MA' || LPAD(seq_membership_id.NEXTVAL, 5, '0') INTO v_activityID FROM DUAL;
+  SELECT 'PY' || LPAD(seq_payment_id.NEXTVAL, 5, '0') INTO v_paymentID FROM DUAL;
+
+  -- Insert payment
+  INSERT INTO Payment (PaymentID, PaymentMethod, PaymentDate)
+  VALUES (v_paymentID, UPPER(p_paymentMethod), v_activityDate);
+
+  -- Insert membership activity
+  INSERT INTO MembershipActivity (
+    MembershipActivityID, UserID, PaymentID, ActivityName, ActivityDate,
+    InitialMembershipType, CurrentMembershipType, OldExpiryDate, NewExpiryDate,
+    OldMaxBookAllowed, NewMaxBookAllowed, FeeCharged
+  )
+  VALUES (
+    v_activityID, p_userID, v_paymentID, 'UPGRADE', v_activityDate,
+    v_currentType, p_newMembershipType, v_oldExpiry, v_newExpiry,
+    v_oldMax, v_newMax, v_fee
+  );
+
+  -- Output
+  DBMS_OUTPUT.PUT_LINE('Membership successfully upgraded for user ' || p_userID);
+  DBMS_OUTPUT.PUT_LINE('--- MembershipActivity Inserted ---');
+  DBMS_OUTPUT.PUT_LINE('ActivityID         : ' || v_activityID);
+  DBMS_OUTPUT.PUT_LINE('ActivityName       : UPGRADE');
+  DBMS_OUTPUT.PUT_LINE('ActivityDate       : ' || TO_CHAR(v_activityDate, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('PaymentID          : ' || v_paymentID);
+  DBMS_OUTPUT.PUT_LINE('Payment Method     : ' || p_paymentMethod);
+  DBMS_OUTPUT.PUT_LINE('Initial Type       : ' || v_currentType);
+  DBMS_OUTPUT.PUT_LINE('Upgraded To        : ' || p_newMembershipType);
+  DBMS_OUTPUT.PUT_LINE('Old Expiry Date    : ' || TO_CHAR(v_oldExpiry, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('New Expiry Date    : ' || TO_CHAR(v_newExpiry, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('Old Max Book       : ' || v_oldMax);
+  DBMS_OUTPUT.PUT_LINE('New Max Book       : ' || v_newMax);
+  DBMS_OUTPUT.PUT_LINE('Fee Charged        : RM' || TO_CHAR(v_fee, '9990.00'));
+
+END;
+/

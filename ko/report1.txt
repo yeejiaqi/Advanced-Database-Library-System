@@ -1,0 +1,103 @@
+SET SERVEROUTPUT ON
+SET LINESIZE 200
+cl scr
+CREATE OR REPLACE PROCEDURE report1_kjq
+IS
+    v_highestCount                  number(10,0):=0;
+    v_RC                            BorrowDetails.ReturnCondition%TYPE;
+    v_highestCountPerYear           number(10,0) := 0;
+    v_RCPerYear                     BorrowDetails.ReturnCondition%TYPE;
+    v_lost                          number(10,0) := 0;
+    v_heavyDmg                      number(10,0) := 0;
+    v_lightDmg                      number(10,0) := 0;
+
+    --Nested Cursor
+    CURSOR fine_year_cursor IS
+        SELECT DISTINCT EXTRACT(YEAR FROM FineIssuedDate) AS Year
+        FROM Fine;
+    fine_year_rec fine_year_cursor%ROWTYPE;
+
+    CURSOR fineDetail_cursor IS
+        SELECT B.ReturnCondition, COUNT(F.FineID) AS Count
+        FROM Fine F JOIN BorrowDetails B ON F.FineID = B.FineID
+        WHERE EXTRACT(YEAR FROM F.FineIssuedDate) = fine_year_rec.Year AND F.FineType = 'BOOKFINE' AND
+        F.FineReason LIKE '%CONDITION%'
+        GROUP BY B.ReturnCondition
+        ORDER BY B.ReturnCondition;
+    fineDetail_rec fineDetail_cursor%ROWTYPE;
+        
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('-----------------Report of Yearly Condition Factors for Borrow Book------------------');
+    DBMS_OUTPUT.PUT_LINE(chr(10));
+    OPEN fine_year_cursor;
+    FETCH fine_year_cursor INTO  fine_year_rec;
+    WHILE fine_year_cursor%FOUND
+    LOOP
+        v_highestCountPerYear:= 0;
+        DBMS_OUTPUT.PUT_LINE('*************************************************************************************');
+        DBMS_OUTPUT.PUT_LINE('Condition Factors Cases for Year: '||fine_year_rec.Year);
+        DBMS_OUTPUT.PUT_LINE('_____________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE(' | Condition                                             | Count                     |');
+        DBMS_OUTPUT.PUT_LINE('-------------------------------------------------------------------------------------');
+        
+        OPEN fineDetail_cursor;
+        FETCH fineDetail_cursor INTO fineDetail_rec;
+        
+        WHILE fineDetail_cursor%FOUND 
+        LOOP
+            IF fineDetail_rec.Count>= v_highestCountPerYear THEN
+                v_highestCountPerYear := fineDetail_rec.Count;
+                v_RCPerYear := fineDetail_rec.ReturnCondition;
+            END IF;
+
+            IF fineDetail_rec.ReturnCondition = 'LOST' THEN
+                v_lost := v_lost+fineDetail_rec.Count;
+            ELSIF fineDetail_rec.ReturnCondition = 'HEAVYDMG' THEN
+                v_heavyDmg := v_heavyDmg +fineDetail_rec.Count;
+            ELSE
+                v_lightDmg := v_lightDmg+fineDetail_rec.Count;
+            END IF;
+
+            DBMS_OUTPUT.PUT_LINE( ' | '||
+                    RPAD(fineDetail_rec.ReturnCondition,53) || ' | ' || 
+                    RPAD(fineDetail_rec.Count,25) || ' | '
+                );
+            FETCH fineDetail_cursor INTO fineDetail_rec;
+        END LOOP;
+        CLOSE fineDetail_cursor;
+
+        DBMS_OUTPUT.PUT_LINE(' |_______________________________________________________|___________________________|');
+
+
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+        DBMS_OUTPUT.PUT_LINE('The major source of fine cases in year '||fine_year_rec.Year||': '||v_RCPerYear||' ('|| v_highestCountPerYear||')');
+        DBMS_OUTPUT.PUT_LINE('*************************************************************************************');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+        FETCH fine_year_cursor INTO fine_year_rec;
+
+    END LOOP;
+    
+    IF v_lost >= v_heavyDmg AND v_lost >= v_lightDmg THEN
+        v_highestCount := v_lost;
+        v_RC:='LOST';
+        DBMS_OUTPUT.PUT_LINE('The major source of fine cases over years are due to '||v_RC||' ('||v_highestCount||')');
+        DBMS_OUTPUT.PUT_LINE('The current fine policy should be further enforced and become stricter.');
+        DBMS_OUTPUT.PUT_LINE('Suggestion: Charge higher fees.');
+    ELSIF v_heavyDmg >= v_lost AND v_heavyDmg>=v_lightDmg THEN
+        v_highestCount := v_heavyDmg;
+        v_RC:='HEAVYDMG';
+        DBMS_OUTPUT.PUT_LINE('The major source of fine cases over years are due to '||v_RC||' ('||v_highestCount||')');
+        DBMS_OUTPUT.PUT_LINE('The library staffs should further investigate whether is this the problem of the book');
+        DBMS_OUTPUT.PUT_LINE('quality or the users bad habits.');
+    ELSIF v_lightDmg>=v_lost AND v_lightDmg >= v_heavyDmg THEN
+        v_highestCount := v_lightDmg;
+        v_RC:='LIGHTDMG';
+        DBMS_OUTPUT.PUT_LINE('The major source of fine cases over years are due to '||v_RC||' ('||v_highestCount||')');
+        DBMS_OUTPUT.PUT_LINE('The book should implement a better maintenance method, like a thicker book wrapping.');
+        DBMS_OUTPUT.PUT_LINE('Then educate students the proper way to handle books through seminar.');
+    END IF;
+
+END;
+/
+
+EXEC report1_kjq;

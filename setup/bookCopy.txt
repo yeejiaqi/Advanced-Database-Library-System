@@ -1,0 +1,17 @@
+DROP TABLE BookCopy;
+CREATE TABLE BookCopy(
+    BookCopyID      CHAR(7)         NOT NULL,
+    BookCondition   VARCHAR2(8)     DEFAULT 'GOOD'      NOT NULL,
+    BookStatus      VARCHAR2(16)    DEFAULT 'AVAILABLE' NOT NULL,
+    BookID          CHAR(7)         NOT NULL,
+    CONSTRAINT pk_bookCopy_bookCopyID PRIMARY KEY (BookCopyID),
+    CONSTRAINT fk_bookCopy_bookID FOREIGN KEY (BookID) REFERENCES Book (BookID),
+    CONSTRAINT chk_bookCopy_bookCopyID CHECK (REGEXP_LIKE(BookCopyID, '^BC([0-9]{5}+$)')),
+    CONSTRAINT chk_bookCopy_bookCondition CHECK (BookCondition IN ('GOOD', 'LIGHTDMG', 'HEAVYDMG', 'LOST')),
+    CONSTRAINT chk_bookCopy_bookStatus CHECK (
+        BookStatus IN ('BORROWED', 'RESERVED', 'UNAVAILABLE', 'AVAILABLE', 'UNDERMAINTENANCE') AND 
+        ((BookCondition = 'GOOD' AND (BookStatus = 'BORROWED' OR BookStatus = 'RESERVED' OR BookStatus = 'AVAILABLE')) OR
+        ((BookCondition = 'LIGHTDMG' OR BookCondition = 'HEAVYDMG') AND (BookStatus = 'UNDERMAINTENANCE')) OR
+        ((BookCondition = 'LOST' OR BookCondition = 'HEAVYDMG') AND BookStatus = 'UNAVAILABLE'))
+    )
+);

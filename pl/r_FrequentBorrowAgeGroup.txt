@@ -1,0 +1,180 @@
+
+SET LINESIZE 200
+SET SERVEROUTPUT ON
+
+CREATE OR REPLACE PROCEDURE prc_AgeGroupBorrowRep (
+    p_startDate DATE,
+    p_endDate DATE
+) AS
+    -- Variables for totals
+    v_grand_total_books NUMBER := 0;
+    v_grand_total_users NUMBER := 0;
+    v_peak_month VARCHAR2(20);
+    v_peak_borrows NUMBER := 0;
+    
+    -- Age group totals
+    TYPE age_group_totals_type IS TABLE OF NUMBER INDEX BY VARCHAR2(20);
+    v_age_group_books age_group_totals_type;
+    v_age_group_users age_group_totals_type;
+    
+    -- Cursor for distinct years in range
+    CURSOR year_cursor IS
+        SELECT DISTINCT EXTRACT(YEAR FROM BorrowDate) AS borrow_year
+        FROM Borrow
+        WHERE BorrowDate BETWEEN p_startDate AND p_endDate
+        ORDER BY 1;
+    
+    -- Cursor for age groups
+    CURSOR age_group_cursor IS
+        SELECT DISTINCT 
+            CASE
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) < 13 THEN 'Children'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 13 AND 19 THEN 'Teenagers'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 20 AND 35 THEN 'Young Adults'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 36 AND 55 THEN 'Adults'
+                ELSE 'Seniors'
+            END AS age_group
+        FROM LibraryUser u
+        JOIN Borrow b ON u.UserID = b.UserID
+        WHERE b.BorrowDate BETWEEN p_startDate AND p_endDate
+        ORDER BY 1;
+    
+    -- Cursor for months within each year and age group
+    CURSOR month_cursor(p_year NUMBER, p_age_group VARCHAR2) IS
+        SELECT 
+            TO_CHAR(b.BorrowDate, 'MON') AS month_name,
+            COUNT(DISTINCT u.UserID) AS user_count,
+            COUNT(bd.BookCopyID) AS book_count
+        FROM LibraryUser u
+        JOIN Borrow b ON u.UserID = b.UserID
+        JOIN BorrowDetails bd ON b.BorrowID = bd.BorrowID
+        WHERE EXTRACT(YEAR FROM b.BorrowDate) = p_year
+          AND b.BorrowDate BETWEEN p_startDate AND p_endDate
+          AND CASE
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) < 13 THEN 'Children'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 13 AND 19 THEN 'Teenagers'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 20 AND 35 THEN 'Young Adults'
+                WHEN (EXTRACT(YEAR FROM SYSDATE) - EXTRACT(YEAR FROM u.UserDateOfBirth)) BETWEEN 36 AND 55 THEN 'Adults'
+                ELSE 'Seniors'
+              END = p_age_group
+        GROUP BY TO_CHAR(b.BorrowDate, 'MON'), EXTRACT(MONTH FROM b.BorrowDate)
+        ORDER BY EXTRACT(MONTH FROM b.BorrowDate);
+
+BEGIN
+    -- Initialize age group totals
+    v_age_group_books('Children') := 0;
+    v_age_group_books('Teenagers') := 0;
+    v_age_group_books('Young Adults') := 0;
+    v_age_group_books('Adults') := 0;
+    v_age_group_books('Seniors') := 0;
+    
+    v_age_group_users('Children') := 0;
+    v_age_group_users('Teenagers') := 0;
+    v_age_group_users('Young Adults') := 0;
+    v_age_group_users('Adults') := 0;
+    v_age_group_users('Seniors') := 0;
+
+    -- Display report header
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || '===== AGE GROUP BORROWING ANALYSIS FROM ' || 
+                         TO_CHAR(p_startDate, 'DD-MON-YYYY') || ' TO ' || 
+                         TO_CHAR(p_endDate, 'DD-MON-YYYY') || ' =====');
+    DBMS_OUTPUT.PUT_LINE('========================================================================');
+
+    -- Year cursor
+    FOR year_rec IN year_cursor 
+    LOOP
+
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || 'Year: ' || year_rec.borrow_year);
+        
+        -- Age group cursor
+        FOR age_rec IN age_group_cursor 
+        LOOP
+
+            DBMS_OUTPUT.PUT_LINE('AgeGroup: ' || age_rec.age_group);
+            DBMS_OUTPUT.PUT_LINE('-------------------------------------------------------------------------');
+            DBMS_OUTPUT.PUT_LINE('Month   | Total Users | Books Borrowed | Average Books Borrowed per User');
+            DBMS_OUTPUT.PUT_LINE('--------+-------------+----------------+---------------------------------');
+            
+            -- Month cursor for this year and age group
+            FOR month_rec IN month_cursor(year_rec.borrow_year, age_rec.age_group) 
+            LOOP
+
+                DBMS_OUTPUT.PUT_LINE(
+                    RPAD(month_rec.month_name, 7) || ' | ' ||
+                    RPAD(month_rec.user_count, 11) || ' | ' ||
+                    RPAD(month_rec.book_count, 14) || ' | ' ||
+                    CASE WHEN month_rec.user_count > 0 
+                         THEN ROUND(month_rec.book_count/month_rec.user_count, 1)
+                         ELSE 0
+                    END
+                );
+                
+                -- Update totals
+                v_age_group_books(age_rec.age_group) := 
+                    v_age_group_books(age_rec.age_group) + month_rec.book_count;
+                v_age_group_users(age_rec.age_group) := 
+                    v_age_group_users(age_rec.age_group) + month_rec.user_count;
+                
+                v_grand_total_books := v_grand_total_books + month_rec.book_count;
+                v_grand_total_users := v_grand_total_users + month_rec.user_count;
+                
+                -- Track peak month
+                IF month_rec.book_count > v_peak_borrows THEN
+                    v_peak_borrows := month_rec.book_count;
+                    v_peak_month := month_rec.month_name || '-' || year_rec.borrow_year;
+                END IF;
+
+            END LOOP;
+
+            DBMS_OUTPUT.PUT_LINE(CHR(10));
+
+        END LOOP;
+
+    END LOOP;
+    
+    -- Display summary statistics
+    DBMS_OUTPUT.PUT_LINE('========================================================================');
+    DBMS_OUTPUT.PUT_LINE('GRAND TOTAL BOOKS BORROWED: ' || v_grand_total_books);
+    DBMS_OUTPUT.PUT_LINE('PEAK BORROWING MONTH: ' || v_peak_month || ' (' || v_peak_borrows || ' books)');
+    DBMS_OUTPUT.PUT_LINE('========================================================================');
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || 'AGE GROUP BREAKDOWN:');
+    DBMS_OUTPUT.PUT_LINE('-------------------------------------------------------------------------');
+    DBMS_OUTPUT.PUT_LINE('Age Group    | % of Books | % of Users | Average Books Borrowed per User');
+    DBMS_OUTPUT.PUT_LINE('-------------+------------+------------+---------------------------------');
+    
+    -- Display age group percentages
+    DECLARE
+        v_groups DBMS_SQL.VARCHAR2S;
+    BEGIN
+        -- Initialize array
+        v_groups(1) := 'Children';
+        v_groups(2) := 'Teenagers';
+        v_groups(3) := 'Young Adults';
+        v_groups(4) := 'Adults';
+        v_groups(5) := 'Seniors';
+        
+        FOR i IN 1..v_groups.COUNT LOOP
+            DECLARE
+                v_pct_books NUMBER;
+                v_pct_users NUMBER;
+            BEGIN
+                v_pct_books := ROUND((v_age_group_books(v_groups(i))/v_grand_total_books)*100, 1);
+                v_pct_users := ROUND((v_age_group_users(v_groups(i))/v_grand_total_users)*100, 1);
+                
+                DBMS_OUTPUT.PUT_LINE(
+                    RPAD(v_groups(i), 12) || ' | ' ||
+                    RPAD(v_pct_books || '%', 10) || ' | ' ||
+                    RPAD(v_pct_users || '%', 10) || ' | ' ||
+                    CASE WHEN v_age_group_users(v_groups(i)) > 0 
+                        THEN ROUND(v_age_group_books(v_groups(i))/v_age_group_users(v_groups(i)), 1)
+                        ELSE 0
+                    END
+                );
+            END;
+        END LOOP;
+    END;
+
+    
+    DBMS_OUTPUT.PUT_LINE('=========================================================================');
+END;
+/

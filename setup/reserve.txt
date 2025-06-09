@@ -1,0 +1,41 @@
+DROP TABLE Reserve;
+CREATE TABLE Reserve(
+    ReserveID CHAR(7) NOT NULL,
+    ReserveDateTime DATE DEFAULT SYSDATE NOT NULL,
+    EstPickupAvailableStartDate DATE,
+    EstPickupAvailableDueDate DATE,
+    ActualPickupDate DATE,
+    ReserveStatus VARCHAR2(14) NOT NULL,
+    UserID CHAR(7) NOT NULL,
+    CONSTRAINT pk_r_reserveID PRIMARY KEY (ReserveID),
+    CONSTRAINT fk_r_userID FOREIGN KEY (UserID) REFERENCES LibraryUser (UserID),
+    CONSTRAINT chk_r_reserveID CHECK (REGEXP_LIKE(ReserveID, '^RS([0-9]{5})+$')),
+    CONSTRAINT chk_r_status CHECK (ReserveStatus IN ('RESERVED', 'READYTOCOLLECT', 'COLLECTED', 'FAILED', 'CANCELLED', 'EXPIRED', 'DELAYED')
+    AND (
+    ((ReserveStatus = 'RESERVED' OR ReserveStatus = 'READYTOCOLLECT' OR ReserveStatus = 'EXPIRED') AND
+    EstPickupAvailableStartDate IS NOT NULL AND
+    EstPickupAvailableDueDate IS NOT NULL AND
+    ActualPickupDate IS NULL AND
+    EstPickupAvailableStartDate < EstPickupAvailableDueDate AND
+    EstPickupAvailableDueDate = EstPickupAvailableStartDate + 3
+    )
+        OR
+    (ReserveStatus = 'CANCELLED' AND
+    ActualPickupDate IS NULL
+    )
+        OR
+    (ReserveStatus = 'COLLECTED' AND
+    EstPickupAvailableStartDate IS NOT NULL AND
+    EstPickupAvailableDueDate IS NOT NULL AND
+    ActualPickupDate IS NOT NULL AND
+    ActualPickupDate >= EstPickupAvailableStartDate AND ActualPickupDate <= EstPickupAvailableDueDate
+    )
+        OR
+    ((ReserveStatus = 'FAILED' OR ReserveStatus = 'DELAYED') AND
+    EstPickupAvailableStartDate IS NULL AND
+    EstPickupAvailableDueDate IS NULL AND
+    ActualPickupDate IS NULL
+    )
+  )
+  )
+);

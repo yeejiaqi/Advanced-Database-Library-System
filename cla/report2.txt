@@ -1,0 +1,84 @@
+SET SERVEROUTPUT ON;
+CREATE OR REPLACE PROCEDURE yearly_membership_activity
+AS
+    v_total_fee     NUMBER(10,2);
+    v_topActivity   VARCHAR2(12);
+    v_topAmount     NUMBER(10,2);
+
+    CURSOR year_cursor IS
+        SELECT DISTINCT EXTRACT(YEAR FROM ActivityDate) AS year
+        FROM MembershipActivity
+        ORDER BY year;
+
+    CURSOR activity_cursor(p_year NUMBER) IS
+        SELECT ActivityName,
+               COUNT(*) AS total_activities,
+               SUM(FeeCharged) AS total_fee
+        FROM MembershipActivity
+        WHERE EXTRACT(YEAR FROM ActivityDate) = p_year
+        GROUP BY ActivityName
+        ORDER BY ActivityName;
+
+    v_year_row      year_cursor%ROWTYPE;
+    v_activity_row  activity_cursor%ROWTYPE;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('==================== Membership Activity Summary Per Year =========================='); 
+
+    OPEN year_cursor;
+    LOOP
+        FETCH year_cursor INTO v_year_row;
+        EXIT WHEN year_cursor%NOTFOUND;
+
+        v_total_fee := 0;
+        v_topActivity := '';
+        v_topAmount := 0;
+
+        DBMS_OUTPUT.PUT_LINE('Year: ' || v_year_row.year);
+        DBMS_OUTPUT.PUT_LINE(
+            RPAD('Activity Type', 18) ||
+            LPAD('Total Performed', 20) ||
+            LPAD('Total Fee Collected (RM)', 27) ||
+            LPAD('Contribution (%)', 20)
+        );
+        DBMS_OUTPUT.PUT_LINE(RPAD('-', 85, '-'));
+
+        -- First pass: compute total fee and top contributor
+        OPEN activity_cursor(v_year_row.year);
+        LOOP
+            FETCH activity_cursor INTO v_activity_row;
+            EXIT WHEN activity_cursor%NOTFOUND;
+
+            v_total_fee := v_total_fee + v_activity_row.total_fee;
+
+            IF v_activity_row.total_fee > v_topAmount THEN
+                v_topAmount := v_activity_row.total_fee;
+                v_topActivity := v_activity_row.ActivityName;
+            END IF;
+        END LOOP;
+        CLOSE activity_cursor;
+
+        -- Second pass: print formatted data
+        OPEN activity_cursor(v_year_row.year);
+        LOOP
+            FETCH activity_cursor INTO v_activity_row;
+            EXIT WHEN activity_cursor%NOTFOUND;
+
+            DBMS_OUTPUT.PUT_LINE(
+                RPAD(v_activity_row.ActivityName, 18) ||
+                LPAD(TO_CHAR(v_activity_row.total_activities), 20) ||
+                LPAD(TO_CHAR(v_activity_row.total_fee, '990.00'), 27) ||
+                LPAD(TO_CHAR((v_activity_row.total_fee / v_total_fee) * 100, '990.00') || '%', 20)
+            );
+        END LOOP;
+        CLOSE activity_cursor;
+
+        DBMS_OUTPUT.PUT_LINE(RPAD('-', 85, '-'));
+        DBMS_OUTPUT.PUT_LINE('Total Fee Collected in ' || v_year_row.year || ': RM ' || TO_CHAR(v_total_fee, '9990.00'));
+        DBMS_OUTPUT.PUT_LINE('Top Contributor Activity: ' || v_topActivity || ' (RM ' || TO_CHAR(v_topAmount, '9990.00') || ')');
+        DBMS_OUTPUT.PUT_LINE(CHR(10));
+    END LOOP;
+    CLOSE year_cursor;
+
+    DBMS_OUTPUT.PUT_LINE('=====================================================================================');
+END;
+/

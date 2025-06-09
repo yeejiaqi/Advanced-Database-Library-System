@@ -1,0 +1,37 @@
+CREATE OR REPLACE TRIGGER trg_sync_membership_to_user
+AFTER INSERT OR UPDATE ON MembershipActivity
+FOR EACH ROW
+DECLARE
+  v_status      VARCHAR2(9);
+BEGIN
+  CASE
+    WHEN INSERTING THEN
+      
+      v_status := 'ACTIVE';
+
+      UPDATE LibraryUser
+      SET 
+        MembershipType = :NEW.CurrentMembershipType,
+        MembershipExpiry = :NEW.NewExpiryDate,
+        MaxBookAllowed = :NEW.NewMaxBookAllowed,
+        MembershipStatus = v_status
+      WHERE UserID = :NEW.UserID;
+
+    WHEN UPDATING THEN
+      -- Set status based on whether the new expiry date has passed
+      v_status := CASE 
+                    WHEN :NEW.NewExpiryDate < SYSDATE THEN 'EXPIRED'
+                    ELSE 'ACTIVE'
+                  END;
+
+      UPDATE LibraryUser
+      SET 
+        MembershipType = :NEW.CurrentMembershipType,
+        MembershipExpiry = :NEW.NewExpiryDate,
+        MaxBookAllowed = :NEW.NewMaxBookAllowed,
+        MembershipStatus = v_status
+      WHERE UserID = :NEW.UserID;
+
+  END CASE;
+END;
+/

@@ -1,0 +1,17 @@
+DROP TABLE Facility;
+CREATE TABLE Facility(
+    FacilityID                          CHAR(7)         NOT NULL,
+    FacilityName                        VARCHAR2(20)    UNIQUE                  NOT NULL,
+    FacilityType                        VARCHAR2(15)    NOT NULL,
+    Capacity                            NUMBER(2)     NOT NULL,
+    FacilityCondition                   VARCHAR2(9)     NOT NULL,
+    FacilityStatus                      VARCHAR2(20)    DEFAULT 'AVAILABLE'     NOT NULL,
+    CONSTRAINT pk_f_FacilityID PRIMARY KEY (FacilityID),
+    CONSTRAINT chk_f_FacilityID CHECK (REGEXP_LIKE(FacilityID, '^FA([0-9]{5})+$')),
+    CONSTRAINT chk_f_facilityType CHECK (FacilityType IN ('PROJECTORROOM','DISCUSSIONROOM', 'STUDYROOM', 'MULTIMEDIAROOM', 'CONFERENCEROOM')),
+    CONSTRAINT chk_f_facilityCapacity CHECK (Capacity BETWEEN 1 AND 25),
+    CONSTRAINT chk_f_facilityCondition CHECK (FacilityCondition IN ('GOOD','DIRTY','DEFECTIVE')),
+    CONSTRAINT chk_f_facilityStatus CHECK (FacilityStatus IN ('AVAILABLE', 'UNDERMAINTENANCE')),
+    CONSTRAINT chk_f_ConditionAndStatus CHECK ((FacilityCondition = 'GOOD' AND FacilityStatus = 'AVAILABLE') OR (FacilityCondition IN ('DIRTY', 'DEFECTIVE') AND FacilityStatus = 'UNDERMAINTENANCE'))
+); 
+  

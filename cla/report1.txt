@@ -1,0 +1,114 @@
+SET SERVEROUTPUT ON;
+SET LINESIZE 200;
+
+CREATE OR REPLACE PROCEDURE age_group_membership_analysis
+IS
+    CURSOR age_group_cursor IS
+        SELECT 'Children' AS AgeGroup, 0 AS MinAge, 12 AS MaxAge FROM DUAL
+        UNION ALL
+        SELECT 'Teenager', 13, 17 FROM DUAL
+        UNION ALL
+        SELECT 'Young Adult', 18, 25 FROM DUAL
+        UNION ALL
+        SELECT 'Adult', 26, 59 FROM DUAL
+        UNION ALL
+        SELECT 'Elderly', 60, 120 FROM DUAL;
+
+    v_age_group_record age_group_cursor%ROWTYPE;
+
+    CURSOR membershipbyagerange_cursor(p_minAge NUMBER, p_maxAge NUMBER) IS
+        SELECT MembershipType, COUNT(*) AS Count
+        FROM LibraryUser
+        WHERE FLOOR(MONTHS_BETWEEN(SYSDATE, UserDateOfBirth) / 12)
+              BETWEEN p_minAge AND p_maxAge
+        GROUP BY MembershipType;
+
+    v_membership_record membershipbyagerange_cursor%ROWTYPE;
+
+    v_total_per_group      NUMBER(10, 0);
+    v_highest_count_group  NUMBER(10, 0);
+    v_highest_type_group   VARCHAR2(10);
+
+    -- Summary variables
+    v_total_users          NUMBER := 0;
+    v_empty_age_groups     VARCHAR2(1000) := '';
+    v_most_popular_type    VARCHAR2(10) := '';
+    v_most_popular_from    VARCHAR2(20) := '';
+    v_global_highest_count NUMBER := 0;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('===================== Age Group Membership Analysis ======================');
+
+    OPEN age_group_cursor;
+    LOOP
+        FETCH age_group_cursor INTO v_age_group_record;
+        EXIT WHEN age_group_cursor%NOTFOUND;
+
+        v_total_per_group := 0;
+        v_highest_count_group := 0;
+        v_highest_type_group := 'NONE';
+
+        
+        OPEN membershipbyagerange_cursor(v_age_group_record.MinAge, v_age_group_record.MaxAge);
+        LOOP
+            FETCH membershipbyagerange_cursor INTO v_membership_record;
+            EXIT WHEN membershipbyagerange_cursor%NOTFOUND;
+
+            v_total_per_group := v_total_per_group + v_membership_record.Count;
+
+            IF v_membership_record.Count > v_highest_count_group THEN
+                v_highest_count_group := v_membership_record.Count;
+                v_highest_type_group := v_membership_record.MembershipType;
+            END IF;
+
+           
+            IF v_membership_record.Count > v_global_highest_count THEN
+                v_global_highest_count := v_membership_record.Count;
+                v_most_popular_type := v_membership_record.MembershipType;
+                v_most_popular_from := v_age_group_record.AgeGroup;
+            END IF;
+
+            v_total_users := v_total_users + v_membership_record.Count;
+        END LOOP;
+        CLOSE membershipbyagerange_cursor;
+
+        IF v_total_per_group > 0 THEN
+            DBMS_OUTPUT.PUT_LINE(CHR(10) || 'Age Group: ' || v_age_group_record.AgeGroup);
+            DBMS_OUTPUT.PUT_LINE('Membership Type   Count   Contribution (%)');
+            DBMS_OUTPUT.PUT_LINE('------------------------------------------');
+
+            
+            OPEN membershipbyagerange_cursor(v_age_group_record.MinAge, v_age_group_record.MaxAge);
+            LOOP
+                FETCH membershipbyagerange_cursor INTO v_membership_record;
+                EXIT WHEN membershipbyagerange_cursor%NOTFOUND;
+
+                DBMS_OUTPUT.PUT_LINE(
+                    RPAD(v_membership_record.MembershipType, 17) ||
+                    LPAD(v_membership_record.Count, 5) ||
+                    LPAD(TO_CHAR((v_membership_record.Count / v_total_per_group) * 100, '990.00') || '%', 20)
+                );
+            END LOOP;
+            CLOSE membershipbyagerange_cursor;
+
+            DBMS_OUTPUT.PUT_LINE('------------------------------------------');
+            DBMS_OUTPUT.PUT_LINE('Most Popular Membership: ' || v_highest_type_group || ' (' || v_highest_count_group || ' users)');
+        ELSE
+            v_empty_age_groups := v_empty_age_groups || v_age_group_record.AgeGroup || ', ';
+        END IF;
+    END LOOP;
+    CLOSE age_group_cursor;
+
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || '============================= Summary =============================');
+    DBMS_OUTPUT.PUT_LINE('Total Users: ' || v_total_users);
+
+    IF v_empty_age_groups IS NOT NULL THEN
+        DBMS_OUTPUT.PUT_LINE('No users found in age group(s): ' || RTRIM(v_empty_age_groups, ', '));
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('All age groups have user participation.');
+    END IF;
+
+    DBMS_OUTPUT.PUT_LINE('Most Popular Membership Overall: ' || v_most_popular_type || ' (' || v_global_highest_count || ' users)');
+    DBMS_OUTPUT.PUT_LINE('This membership is most common among the "' || v_most_popular_from || '" age group.');
+    DBMS_OUTPUT.PUT_LINE('===================================================================');
+END;
+/

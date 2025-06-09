@@ -1,0 +1,169 @@
+DECLARE
+  e_sequence_missing EXCEPTION;
+  PRAGMA EXCEPTION_INIT(e_sequence_missing, -2289);
+  v_nextActivityID NUMBER;
+BEGIN
+  -- Get next ID from table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(MembershipActivityID, 3, 5))), 0) + 1 
+  INTO v_nextActivityID 
+  FROM MembershipActivity;
+
+  -- Drop the existing sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_membership_id';
+  EXCEPTION
+    WHEN e_sequence_missing THEN
+      NULL; 
+  END;
+
+  -- Create the new sequence
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_membership_id START WITH ' || v_nextActivityID || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+
+
+  -- Create new sequence starting at next available ID
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_membership_id START WITH ' || v_nextActivityID || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+
+DECLARE
+  v_nextPaymentID NUMBER;
+BEGIN
+  -- Get next ID from Payment table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(PaymentID, 3, 5))), 0) + 1 
+  INTO v_nextPaymentID 
+  FROM Payment;
+
+  -- Drop the existing sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_payment_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN -- ORA-02289: sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create new sequence starting at next available ID
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_payment_id START WITH ' || v_nextPaymentID || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+SET SERVEROUTPUT ON;
+CREATE OR REPLACE PROCEDURE RenewMembership (
+    p_userID         IN LibraryUser.UserID%TYPE,
+    p_paymentMethod  IN Payment.PaymentMethod%TYPE
+)
+IS
+  v_userStatus     LibraryUser.UserAccountStatus%TYPE;
+  v_currentType    LibraryUser.MembershipType%TYPE;
+  v_expiry         DATE;
+  v_status         VARCHAR2(9);
+  v_activityDate   DATE := SYSDATE;
+  v_oldExpiry      DATE;
+  v_newExpiry      DATE;
+  v_oldMax         NUMBER(2,0);
+  v_newMax         NUMBER(2,0);
+  v_fee            NUMBER(4,2);
+  v_activityID     VARCHAR2(7);
+  v_paymentID      VARCHAR2(7);
+  v_activityName   VARCHAR2(12);
+  v_overdue_count  NUMBER := 0;
+BEGIN
+  -- Validate payment method
+  IF p_paymentMethod NOT IN ('CASH', 'CARD', 'BANK', 'E-WALLET') THEN
+    RAISE_APPLICATION_ERROR(-20010, 'Invalid payment method.');
+  END IF;
+
+  -- Check if user has overdue fines more than 14 days (PENDING only)
+  SELECT COUNT(*)
+  INTO v_overdue_count
+  FROM Fine f
+  JOIN BorrowDetails bd ON f.FineID = bd.FineID
+  JOIN Borrow b ON bd.BorrowID = b.BorrowID
+  WHERE b.UserID = p_userID
+    AND f.FineStatus = 'PENDING'
+    AND SYSDATE > f.FineDueDate + 14;
+
+  -- If found, blacklist the user and block renewal
+  IF v_overdue_count > 0 THEN
+    UPDATE LibraryUser
+    SET UserAccountStatus = 'BLACKLISTED'
+    WHERE UserID = p_userID;
+    COMMIT;
+    RAISE_APPLICATION_ERROR(-20011, 'User is blacklisted due to unpaid fines overdue more than 14 days.');
+  END IF;
+
+  -- Retrieve current membership info
+  SELECT UserAccountStatus, MembershipType, MembershipExpiry
+  INTO v_userStatus, v_currentType, v_expiry
+  FROM LibraryUser
+  WHERE UserID = p_userID;
+
+  -- Block blacklisted/terminated users
+  IF v_userStatus IN ('BLACKLISTED', 'TERMINATED') THEN
+    RAISE_APPLICATION_ERROR(-20001, 'User account is not eligible for renewal.');
+  ELSIF v_currentType = 'NONE' THEN
+    RAISE_APPLICATION_ERROR(-20002, 'User has no active membership to renew.');
+  END IF;
+
+  -- Determine activity type
+  IF v_expiry < ADD_MONTHS(SYSDATE, -12) THEN
+    v_activityName := 'REACTIVATE';
+  ELSE
+    v_activityName := 'RENEW';
+  END IF;
+
+  -- Membership details
+  CASE v_currentType
+    WHEN 'BASIC' THEN
+      v_oldMax := 3;
+      v_newMax := 3;
+      v_fee := CASE v_activityName WHEN 'REACTIVATE' THEN 2.5 ELSE 5 END;
+    WHEN 'STANDARD' THEN
+      v_oldMax := 6;
+      v_newMax := 6;
+      v_fee := CASE v_activityName WHEN 'REACTIVATE' THEN 5 ELSE 10 END;
+    WHEN 'PREMIUM' THEN
+      v_oldMax := 10;
+      v_newMax := 10;
+      v_fee := CASE v_activityName WHEN 'REACTIVATE' THEN 7.5 ELSE 15 END;
+  END CASE;
+
+  -- Generate IDs
+  SELECT 'MA' || LPAD(seq_membership_id.NEXTVAL, 5, '0') INTO v_activityID FROM DUAL;
+  SELECT 'PY' || LPAD(seq_payment_id.NEXTVAL, 5, '0') INTO v_paymentID FROM DUAL;
+
+  v_oldExpiry := v_expiry;
+  v_newExpiry := ADD_MONTHS(v_activityDate, 12);
+
+  -- Insert into Payment
+  INSERT INTO Payment(PaymentID, PaymentMethod)
+  VALUES (v_paymentID, p_paymentMethod);
+
+  -- Insert into MembershipActivity
+  INSERT INTO MembershipActivity (
+    MembershipActivityID, UserID, PaymentID, ActivityName, ActivityDate,
+    InitialMembershipType, CurrentMembershipType, OldExpiryDate, NewExpiryDate,
+    OldMaxBookAllowed, NewMaxBookAllowed, FeeCharged
+  ) VALUES (
+    v_activityID, p_userID, v_paymentID, v_activityName, v_activityDate,
+    v_currentType, v_currentType, v_oldExpiry, v_newExpiry,
+    v_oldMax, v_newMax, v_fee
+  );
+
+  -- Output summary
+  DBMS_OUTPUT.PUT_LINE('Membership ' || LOWER(v_activityName) || ' successful for user ' || p_userID); 
+  DBMS_OUTPUT.PUT_LINE('ActivityID         : ' || v_activityID);
+  DBMS_OUTPUT.PUT_LINE('ActivityDate       : ' || TO_CHAR(v_activityDate, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('PaymentID          : ' || v_paymentID);
+  DBMS_OUTPUT.PUT_LINE('PaymentMethod      : ' || p_paymentMethod);
+  DBMS_OUTPUT.PUT_LINE('Membership Type    : ' || v_currentType);
+  DBMS_OUTPUT.PUT_LINE('Old Expiry Date    : ' || TO_CHAR(v_oldExpiry, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('New Expiry Date    : ' || TO_CHAR(v_newExpiry, 'DD-MON-YYYY'));
+  DBMS_OUTPUT.PUT_LINE('Old Max Book       : ' || v_oldMax);
+  DBMS_OUTPUT.PUT_LINE('New Max Book       : ' || v_newMax);
+  DBMS_OUTPUT.PUT_LINE('Fee Charged        : RM ' || TO_CHAR(v_fee, '9990.00'));
+
+END;
+/

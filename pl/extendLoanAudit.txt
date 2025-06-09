@@ -1,0 +1,12 @@
+DROP TABLE ExtendLoanAudit;
+CREATE TABLE ExtendLoanAudit(
+    UserID          CHAR(7)         NOT NULL,
+    BookCopyID      CHAR(7)         NOT NULL,
+    ExtendDate      DATE            DEFAULT SYSDATE NOT NULL,
+    OriReturnDate   DATE            NOT NULL,
+    NewReturnDate   DATE            NOT NULL,
+    CONSTRAINT pk_extendLoanAudit PRIMARY KEY(UserID, BookCopyID),
+    CONSTRAINT chk_extendLoanAudit_UserID FOREIGN KEY (UserID) REFERENCES LibraryUser(UserID),
+    CONSTRAINT chk_extendLoanAudit_BookCopyID FOREIGN KEY (BookCopyID) REFERENCES BookCopy(BookCopyID),
+    CONSTRAINT chk_extendLoanAudit_OriDate CHECK (OriReturnDate < NewReturnDate)
+);

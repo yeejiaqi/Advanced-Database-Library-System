@@ -1,0 +1,123 @@
+DROP SEQUENCE seq_FINE;
+CREATE SEQUENCE seq_FINE
+MINVALUE 196
+MAXVALUE 999999
+START WITH 196
+INCREMENT BY 1
+NOCACHE;
+
+CREATE OR REPLACE TRIGGER CREATE_BOOKFINE_TRIGGER
+FOR UPDATE OF ReturnCondition ON BorrowDetails
+COMPOUND TRIGGER
+    TYPE BorrowDetailsRec IS RECORD (
+        BorrowID        BorrowDetails.BorrowID%TYPE,
+        BookCopyID      BorrowDetails.BookCopyID%TYPE,
+        ReturnCondition BorrowDetails.ReturnCondition%TYPE,
+        BorrowStatus    BorrowDetails.BorrowStatus%TYPE
+    );
+    TYPE BorrowDetailsTab IS TABLE OF BorrowDetailsRec INDEX BY PLS_INTEGER;
+    v_BorrowDetails BorrowDetailsTab;
+    v_Index PLS_INTEGER := 0;
+
+    AFTER EACH ROW IS
+    BEGIN
+        v_Index := v_Index + 1;
+        v_BorrowDetails(v_Index).BorrowID := :NEW.BorrowID;
+        v_BorrowDetails(v_Index).BookCopyID := :NEW.BookCopyID;
+        v_BorrowDetails(v_Index).ReturnCondition := :NEW.ReturnCondition;
+        v_BorrowDetails(v_Index).BorrowStatus := :NEW.BorrowStatus;
+    END AFTER EACH ROW;
+
+    AFTER STATEMENT IS
+        v_id Fine.FineID%TYPE;
+        v_idNum NUMBER(10,0);
+        v_days NUMBER(10,0);
+        v_price NUMBER(6,2);
+        v_fineCharged NUMBER(6,2);
+        v_discount NUMBER(6,2);
+        v_total NUMBER(6,2);
+        v_reason Fine.FineReason%TYPE;
+        v_memExpiry LibraryUser.MembershipExpiry%TYPE;
+        v_memType LibraryUser.MembershipType%TYPE;
+        v_status Fine.FineStatus%TYPE;
+    BEGIN
+        FOR i IN 1 .. v_BorrowDetails.COUNT 
+        LOOP
+            -- Determine fine reason
+            IF NOT (v_BorrowDetails(i).ReturnCondition = 'GOOD' AND v_BorrowDetails(i).BorrowStatus = 'RETURNED') THEN
+                IF v_BorrowDetails(i).ReturnCondition = 'GOOD' AND v_BorrowDetails(i).BorrowStatus = 'LATERETURN' THEN
+                    v_reason := 'OVERDUE';
+                ELSIF v_BorrowDetails(i).ReturnCondition IN ('LIGHTDMG','HEAVYDMG','LOST') AND v_BorrowDetails(i).BorrowStatus = 'LATERETURN' THEN
+                    v_reason := 'OVERDUE+CONDITION';
+                ELSIF v_BorrowDetails(i).ReturnCondition IN ('LIGHTDMG','HEAVYDMG','LOST') AND v_BorrowDetails(i).BorrowStatus = 'RETURNED' THEN
+                    v_reason := 'CONDITION';
+                END IF;
+            
+
+                -- Get Book Price
+                SELECT BookPrice INTO v_price
+                FROM Book JOIN BookCopy ON Book.BookID = BookCopy.BookID
+                WHERE BookCopy.BookCopyID = v_BorrowDetails(i).BookCopyID;
+
+                -- Calculate fine based on return condition
+                IF v_BorrowDetails(i).ReturnCondition = 'GOOD' THEN
+                    v_fineCharged := 0;
+                ELSIF v_BorrowDetails(i).ReturnCondition = 'LIGHTDMG' THEN
+                    v_fineCharged := 0.2 * v_price;
+                ELSIF v_BorrowDetails(i).ReturnCondition = 'HEAVYDMG' THEN
+                    v_fineCharged := 0.7 * v_price;
+                ELSE
+                    v_fineCharged := v_price;
+                END IF;
+
+                -- Calculate overdue days
+                SELECT GREATEST(0, TRUNC(SYSDATE) - TRUNC(LatestBookLoanDueDate)) INTO v_days
+                FROM BorrowDetails WHERE BorrowID = v_BorrowDetails(i).BorrowID AND BookCopyID = v_BorrowDetails(i).BookCopyID;
+
+                IF v_BorrowDetails(i).BorrowStatus = 'LATERETURN' THEN
+                    v_fineCharged := v_fineCharged + v_days;
+                END IF;
+
+                -- Get membership details
+                SELECT U.MembershipExpiry, U.MembershipType INTO v_memExpiry, v_memType
+                FROM Borrow B JOIN LibraryUser U ON B.UserID = U.UserID
+                WHERE B.BorrowID = v_BorrowDetails(i).BorrowID;
+
+                -- Calculate discount
+                v_discount := 0;
+                IF v_memExpiry >= SYSDATE AND v_memType != 'NONE' THEN
+                    IF v_memType = 'BASIC' THEN
+                    v_discount := 1;
+                    ELSIF v_memType = 'STANDARD' THEN
+                    v_discount := 3;
+                    ELSE
+                    v_discount := 5;
+                    END IF;
+                END IF;
+
+                -- Generate Fine ID
+                v_idNum:=seq_FINE.nextVal;
+                v_id := 'FN' || LPAD(v_idNum, 5, '0');
+
+                -- Calculate total fine
+                v_total := v_fineCharged - v_discount;
+                IF v_total <= 0 THEN
+                    v_total := 0;
+                    v_status := 'WAIVED';
+                ELSE
+                    v_status := 'PENDING';
+                END IF;
+
+                -- Insert into Fine table
+                INSERT INTO Fine VALUES (v_id, 'BOOKFINE', v_reason, DEFAULT, DEFAULT, v_fineCharged, v_discount, v_total, v_status, NULL);
+
+                -- Update BorrowDetails with FineID
+                UPDATE BorrowDetails
+                SET FineID = v_id
+                WHERE BorrowID = v_BorrowDetails(i).BorrowID AND BookCopyID = v_BorrowDetails(i).BookCopyID;
+                DBMS_OUTPUT.PUT_LINE('New Fine Record Added! ->'||v_id);
+            END IF;
+        END LOOP;
+    END AFTER STATEMENT;
+END;
+/

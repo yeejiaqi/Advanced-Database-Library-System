@@ -1,0 +1,33 @@
+-- trigger1: Trigger update of facility condition and status right after checking out the user
+
+CREATE OR REPLACE TRIGGER trg_UpdFacStatAftCheckout
+BEFORE UPDATE ON FacilityBooking
+FOR EACH ROW
+WHEN (NEW.BookingStatus = 'COMPLETED')
+DECLARE
+  
+  -- Variables
+  v_new_condition VARCHAR2(9);
+  v_new_status    VARCHAR2(20);
+BEGIN
+
+  -- Determine new facility condition and status
+  IF :NEW.FacilityPostUsageCondition = 'GOOD' THEN
+    v_new_condition := 'GOOD';
+    v_new_status    := 'AVAILABLE';
+  ELSE
+    v_new_condition := :NEW.FacilityPostUsageCondition;
+    v_new_status    := 'UNDERMAINTENANCE';
+  END IF;
+
+  -- Update Facility table
+  UPDATE Facility
+  SET FacilityCondition = v_new_condition,
+      FacilityStatus    = v_new_status
+  WHERE FacilityID = :NEW.FacilityID;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE_APPLICATION_ERROR(-20099, 'Unexpected error: ' || SQLERRM);
+END;
+/

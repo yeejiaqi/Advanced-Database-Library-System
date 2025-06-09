@@ -1,0 +1,133 @@
+SET LINESIZE 200;
+SET SERVEROUTPUT ON;
+
+DROP INDEX idx_borrowdate_year;
+DROP INDEX idx_loan_dates;
+
+CREATE INDEX idx_borrowdate_year ON Borrow(EXTRACT(YEAR FROM BorrowDate));
+CREATE INDEX idx_loan_dates ON BorrowDetails(TRUNC(LatestBookLoanDueDate - OriBookLoanDueDate));
+
+CREATE OR REPLACE PROCEDURE prc_YearlyLoanExtend AS
+    v_BYearlyT   NUMBER(5,0) := 0;
+    v_BGrandT    NUMBER(5,0) := 0;
+    v_UYearlyT   NUMBER(5,0) := 0;
+    v_UGrandT    NUMBER(5,0) := 0;
+    v_WithM      NUMBER(5,0) := 0;
+    v_NoneM      NUMBER(5,0) := 0;
+    v_TWithM      NUMBER(5,0) := 0;
+    v_TNoneM      NUMBER(5,0) := 0;
+
+    -- Cursor to retrieve distinct years with loan extensions
+    -- Uses idx_borrowdate_year and idx_loan_dates
+    CURSOR year_cursor IS
+        SELECT DISTINCT EXTRACT(YEAR FROM b.BorrowDate) AS BorrowYear
+        FROM BorrowDetails bd
+        JOIN Borrow b ON bd.BorrowID = b.BorrowID
+        WHERE TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate) IN (7, 14);
+
+    v_year NUMBER(4,0);
+
+    -- Cursor to retrieve users who extended loans in a given year
+    -- Uses idx_borrowdate_year and idx_loan_dates
+    CURSOR user_cursor(p_year IN NUMBER) IS
+        SELECT DISTINCT u.UserID, u.UserName, u.MembershipType
+        FROM BorrowDetails bd
+        JOIN Borrow b ON bd.BorrowID = b.BorrowID
+        JOIN LibraryUser u ON b.UserID = u.UserID
+        WHERE EXTRACT(YEAR FROM b.BorrowDate) = p_year
+        AND TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate) IN (7, 14);
+
+    v_user_rec user_cursor%ROWTYPE;
+
+    -- Cursor to retrieve extension details for a user in a given year
+    -- Uses idx_borrowdate_year and idx_loan_dates
+    CURSOR extension_cursor(p_userid IN VARCHAR2, p_year IN NUMBER) IS
+        SELECT TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate) AS ExtensionDays,
+               COUNT(*) AS BookCount
+        FROM BorrowDetails bd
+        JOIN Borrow b ON bd.BorrowID = b.BorrowID
+        WHERE b.UserID = p_userid
+        AND EXTRACT(YEAR FROM b.BorrowDate) = p_year
+        AND TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate) IN (7, 14)
+        GROUP BY TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate);
+
+    v_ext_rec extension_cursor%ROWTYPE;
+
+BEGIN
+
+    OPEN year_cursor;
+    FETCH year_cursor INTO v_year;
+    IF year_cursor%NOTFOUND THEN
+        DBMS_OUTPUT.PUT_LINE('No records found in the database.');
+        CLOSE year_cursor;
+        RETURN;
+    END IF;
+    
+    WHILE year_cursor%FOUND 
+    LOOP
+        DBMS_OUTPUT.PUT_LINE(CHR(10) || '================== Extension Report for Year: ' || v_year || ' ==================');
+        DBMS_OUTPUT.PUT_LINE('Username                | Membership | Extended Day | Number of Books');
+        DBMS_OUTPUT.PUT_LINE('------------------------+------------+--------------+----------------');
+
+        OPEN user_cursor(v_year);
+        FETCH user_cursor INTO v_user_rec;
+        WHILE user_cursor%FOUND 
+        LOOP
+            v_UYearlyT := v_UYearlyT + 1;
+
+            -- Count users with and without membership
+            IF v_user_rec.MembershipType IS NULL THEN
+                v_NoneM := v_NoneM + 1;
+            ELSE
+                v_WithM := v_WithM + 1;
+            END IF;
+
+            OPEN extension_cursor(v_user_rec.UserID, v_year);
+            FETCH extension_cursor INTO v_ext_rec;
+            WHILE extension_cursor%FOUND 
+            LOOP
+                v_BYearlyT := v_BYearlyT + v_ext_rec.BookCount;
+
+                DBMS_OUTPUT.PUT_LINE(
+                    RPAD(v_user_rec.UserName, 23) || ' | ' ||
+                    RPAD(NVL(v_user_rec.MembershipType, 'None'), 10) || ' | ' ||
+                    RPAD(v_ext_rec.ExtensionDays, 12) || ' | ' ||
+                    RPAD(v_ext_rec.BookCount, 16)
+                );
+
+                FETCH extension_cursor INTO v_ext_rec;
+            END LOOP;
+            CLOSE extension_cursor;
+
+            FETCH user_cursor INTO v_user_rec;
+        END LOOP;
+        CLOSE user_cursor;
+
+        DBMS_OUTPUT.PUT_LINE('---------------------------------------------------------------------');
+        DBMS_OUTPUT.PUT_LINE('Users with Membership: ' || v_WithM);
+        DBMS_OUTPUT.PUT_LINE('Users without Membership: ' || v_NoneM);
+        DBMS_OUTPUT.PUT_LINE('Total Books Extended in ' || v_year || ': ' || v_BYearlyT);
+        DBMS_OUTPUT.PUT_LINE('Total Users Extended Loans in ' || v_year || ': ' || v_UYearlyT);
+
+        v_BGrandT := v_BGrandT + v_BYearlyT;
+        v_UGrandT := v_UGrandT + v_UYearlyT;
+        v_TWithM := v_TWithM + v_WithM;
+        v_TNoneM := v_TNoneM + v_NoneM;
+
+        -- Reset yearly totals for the next iteration
+        v_BYearlyT := 0;
+        v_UYearlyT := 0;
+        v_WithM := 0;
+        v_NoneM := 0;
+
+        FETCH year_cursor INTO v_year;
+    END LOOP;
+    CLOSE year_cursor;
+
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || '=========================== Grand Totals ===========================');
+    DBMS_OUTPUT.PUT_LINE('Total Books Extended: ' || v_BGrandT);
+    DBMS_OUTPUT.PUT_LINE('Total Users Extended Loans: ' || v_UGrandT);
+    DBMS_OUTPUT.PUT_LINE('( Users With Membership: ' || v_TWithM || ' ; Users Without Membership: ' || v_TNoneM || ' )');
+
+END;
+/

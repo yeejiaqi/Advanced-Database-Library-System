@@ -1,0 +1,36 @@
+SET LINESIZE 70 
+SET PAGESIZE 95 
+cl scr
+DROP INDEX fineReason_index;
+
+CREATE INDEX fineReason_index ON Fine(FineReason);
+
+CREATE OR REPLACE VIEW query1_kjq AS
+SELECT  O.Genre, EXTRACT(year FROM F.FineIssuedDate) AS Year,COUNT(F.FineID) AS COUNT 
+FROM Fine F JOIN BorrowDetails B ON F.FineID=B.FineID
+JOIN BookCopy C ON B.BookCopyID=C.BookCopyID
+JOIN Book O ON C.BookID = O.BookID
+WHERE F.FineReason LIKE '%CONDITION%'
+AND F.FineType='BOOKFINE'
+GROUP BY  O.Genre,EXTRACT(year FROM F.FineIssuedDate)
+ORDER BY O.Genre, EXTRACT(year FROM F.FineIssuedDate); 
+
+TTITLE CENTER 'Count of Condition Factor Fine Issued for Borrow Book by Genre' SKIP 2 
+BTITLE LEFT 'Page:' FORMAT 999 SQL.PNO SKIP 2 
+COLUMN Genre FORMAT A40 HEADING 'Book Genre'
+COLUMN Year FORMAT 9999999999999 HEADING 'Year'
+COLUMN COUNT FORMAT 9999999999999 HEADING 'Count'
+
+BREAK ON Report ON Genre SKIP 1 ON Year ON Count SKIP 1
+COMPUTE SUM LABEL 'Total Count: ' OF COUNT ON Genre
+COMPUTE SUM LABEL 'Grand Total Count:' OF COUNT ON REPORT
+
+SELECT * FROM query1_kjq;
+
+PROMPT Borrow Book Condition factors refers to LOST, LIGHTDMG and HEAVYDMG.
+
+CLEAR BREAKS 
+CLEAR COMPUTES
+CLEAR COLUMNS
+TTITLE OFF
+BTITLE OFF

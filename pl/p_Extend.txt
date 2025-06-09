@@ -1,0 +1,97 @@
+CREATE OR REPLACE PROCEDURE p_ExtendLoanPeriod (
+  v_UserID IN VARCHAR2,
+  v_BookCopyID IN VARCHAR2
+) AS
+  v_CurrentBorrow NUMBER;
+  v_AlreadyOverdue NUMBER;
+  v_ReservedCount NUMBER;
+  v_AlreadyExtended NUMBER;
+  v_OriDueDate DATE;
+  v_NewDueDate DATE;
+  v_BorrowID VARCHAR2(7);
+  v_UserName VARCHAR2(50);
+  
+  -- Get borrow details
+  CURSOR c_borrow_details IS
+    SELECT bd.BorrowID, u.UserName, bd.LatestBookLoanDueDate
+    FROM BorrowDetails bd
+    JOIN Borrow b ON bd.BorrowID = b.BorrowID
+    JOIN LibraryUser u ON b.UserID = u.UserID
+    WHERE b.UserID = v_UserID
+    AND bd.BookCopyID = v_BookCopyID
+    AND bd.BorrowStatus = 'BORROWED';
+    
+BEGIN
+
+  -- Check if book is currently borrowed
+  SELECT COUNT(*) 
+  INTO v_CurrentBorrow
+  FROM BorrowDetails bd
+  JOIN Borrow b ON bd.BorrowID = b.BorrowID
+  WHERE b.UserID = v_UserID
+  AND BorrowStatus IN ('BORROWED', 'OVERDUE')
+  AND BookCopyID = v_BookCopyID;
+
+  IF v_CurrentBorrow = 0 THEN
+    RAISE_APPLICATION_ERROR(-20001, 'User does not borrowed this book.'); --Checked
+    RETURN;
+  END IF;
+
+  SELECT COUNT(*) 
+  INTO v_AlreadyOverdue
+  FROM BorrowDetails bd
+  JOIN Borrow b ON bd.BorrowID = b.BorrowID
+  WHERE b.UserID = v_UserID
+  AND BorrowStatus IN ('OVERDUE')
+  AND BookCopyID = v_BookCopyID;
+
+  IF v_AlreadyOverdue > 0 THEN
+    RAISE_APPLICATION_ERROR(-20002, 'The book copy already overdue.'); --Checked
+    RETURN;
+  END IF;
+
+  -- Check if the book is reserved
+  SELECT COUNT(*) INTO v_ReservedCount
+  FROM Reserve r
+  JOIN ReserveDetails rd ON r.ReserveID = rd.ReserveID
+  WHERE r.ReserveStatus = 'RESERVED'
+  AND rd.BookCopyID = v_BookCopyID;
+
+  IF v_ReservedCount > 0 THEN
+    RAISE_APPLICATION_ERROR(-20003, 'Extension not allowed: Book is reserved by another member.'); -- Checked
+    RETURN;
+  END IF;
+
+  -- Check if the book has already been extended beyond 7 days
+  SELECT COUNT(*) 
+  INTO v_AlreadyExtended
+  FROM BorrowDetails
+  WHERE TRUNC(LatestBookLoanDueDate - OriBookLoanDueDate) > 7
+  AND BorrowStatus = 'BORROWED'
+  AND BookCopyID = v_BookCopyID;
+
+  IF v_AlreadyExtended > 0 THEN
+    RAISE_APPLICATION_ERROR(-20004, 'Extension not allowed: Loan period extended has reached limit.'); -- Checked
+    RETURN;
+  END IF;
+
+  FOR borrow_rec IN c_borrow_details 
+  LOOP
+    v_BorrowID := borrow_rec.BorrowID;
+    v_UserName := borrow_rec.UserName;
+    v_OriDueDate := borrow_rec.LatestBookLoanDueDate;
+    
+    -- Calculate new due date (7 days extension)
+    v_NewDueDate := v_OriDueDate + 7;
+
+    -- Update due date
+    UPDATE BorrowDetails
+    SET LatestBookLoanDueDate = v_NewDueDate
+    WHERE BorrowID = v_BorrowID
+    AND BookCopyID = v_BookCopyID
+    AND BorrowStatus = 'BORROWED';
+    
+    EXIT;
+  END LOOP;
+END;
+/

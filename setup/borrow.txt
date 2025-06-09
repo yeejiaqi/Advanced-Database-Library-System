@@ -1,0 +1,9 @@
+DROP TABLE Borrow;
+CREATE TABLE Borrow(
+    BorrowID        CHAR(7)     NOT NULL,
+    BorrowDate      DATE        DEFAULT SYSDATE     NOT NULL,
+    UserID          CHAR(7)     NOT NULL,
+    CONSTRAINT pk_borrow PRIMARY KEY(BorrowID),
+    CONSTRAINT chk_borrow_userID FOREIGN KEY (UserID) REFERENCES LibraryUser(UserID),
+    CONSTRAINT check_borrow_brID CHECK (REGEXP_LIKE(BorrowID, '^BR([0-9]{5})+$'))
+);

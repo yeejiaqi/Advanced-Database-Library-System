@@ -1,0 +1,99 @@
+SET SERVEROUTPUT ON
+SET LINESIZE 200
+cl scr
+DROP INDEX paymentDate_index;
+
+CREATE INDEX paymentDate_index ON Payment(PaymentDate);
+
+CREATE OR REPLACE PROCEDURE report2_kjq
+IS
+    v_grandTotalCases      number(10,0):=0;
+    v_subtotalCases        number(10,0) := 0;
+    v_percentage           number(5,2) :=0;
+    v_diff                 number(10,0) := 0;
+    v_2023                 number(10,0) := 0;
+    v_2024                 number(10,0) := 0;
+
+    --Nested Cursor
+    CURSOR fine_year_cursor IS
+        SELECT DISTINCT EXTRACT(YEAR FROM FineIssuedDate) AS Year
+        FROM Fine
+        WHERE EXTRACT(YEAR FROM FineIssuedDate) IN (2023, 2024);
+    fine_year_rec fine_year_cursor%ROWTYPE;
+
+    CURSOR fineDetail_cursor IS
+        SELECT FineID, FineReason, FineIssuedDate, FineDueDate, PaymentDate
+        FROM Fine JOIN Payment ON Fine.PaymentID = Payment.PaymentID
+        WHERE EXTRACT(year FROM FineIssuedDate) = fine_year_rec.Year
+        AND PaymentDate>FineDueDate;
+    fineDetail_rec fineDetail_cursor%ROWTYPE;
+        
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('-----------------Report of Effectiveness for Charging Late Payment Penalty Fees------------------');
+    DBMS_OUTPUT.PUT_LINE(chr(10));
+    OPEN fine_year_cursor;
+    FETCH fine_year_cursor INTO  fine_year_rec;
+    WHILE fine_year_cursor%FOUND
+    LOOP
+        v_subtotalCases := 0;
+        
+        DBMS_OUTPUT.PUT_LINE('*************************************************************************************************');
+        DBMS_OUTPUT.PUT_LINE('Late Payment Cases for Year: '||fine_year_rec.Year);
+        DBMS_OUTPUT.PUT_LINE('_______________________________________________________________________________________________');
+        DBMS_OUTPUT.PUT_LINE(' | Fine ID | FineReason                               | Issue Date |  Due Date  | Payment Date | ');
+        DBMS_OUTPUT.PUT_LINE('-----------------------------------------------------------------------------------------------');
+        
+        OPEN fineDetail_cursor;
+        FETCH fineDetail_cursor INTO fineDetail_rec;
+        
+        WHILE fineDetail_cursor%FOUND 
+        LOOP
+            v_subtotalCases := v_subtotalCases + 1;
+            DBMS_OUTPUT.PUT_LINE(
+                    ' | ' || fineDetail_rec.FineID || ' | ' ||
+                    RPAD(fineDetail_rec.FineReason,40) || ' | ' ||
+                    TO_CHAR(fineDetail_rec.FineIssuedDate, 'YYYY-MM-DD') || ' | ' ||
+                    TO_CHAR(fineDetail_rec.FineDueDate, 'YYYY-MM-DD') || ' | ' ||
+                    RPAD(TO_CHAR(fineDetail_rec.PaymentDate, 'YYYY-MM-DD'),12) || ' | '
+                );
+            FETCH fineDetail_cursor INTO fineDetail_rec;
+        END LOOP;
+        CLOSE fineDetail_cursor;
+
+        DBMS_OUTPUT.PUT_LINE(' |_________|__________________________________________|____________|____________|______________|');
+
+        v_grandTotalCases := v_grandTotalCases+v_subtotalCases;
+
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+        DBMS_OUTPUT.PUT_LINE('Total Late Payment Cases for Year '||fine_year_rec.Year||': '|| v_subtotalCases);
+        DBMS_OUTPUT.PUT_LINE('*************************************************************************************************');
+        DBMS_OUTPUT.PUT_LINE(chr(10));
+
+        IF fine_year_rec.Year = 2023 THEN
+                v_2023 := v_subtotalCases;
+        ELSIF fine_year_rec.Year = 2024 THEN
+                v_2024 := v_subtotalCases;
+        END IF;
+
+        FETCH fine_year_cursor INTO fine_year_rec;
+    END LOOP;
+    v_diff := v_2024 - v_2023;
+
+    IF v_diff < 0 THEN
+        v_percentage := (v_2023 - v_2024) / v_2023 * 100;
+        DBMS_OUTPUT.PUT_LINE('The late payment cases have decreased by ' || TO_CHAR(v_percentage, 'FM999.00') || '% from year 2023 to year 2024.');
+        DBMS_OUTPUT.PUT_LINE('This shows that issuing late payment fine fees penalty is effective.');
+    ELSIF v_diff > 0 THEN
+        v_percentage := (v_2024 - v_2023) / v_2023 * 100;
+        DBMS_OUTPUT.PUT_LINE('The late payment cases have increased by ' || TO_CHAR(v_percentage, 'FM999.00') || '% from year 2023 to year 2024.');
+        DBMS_OUTPUT.PUT_LINE('This shows that issuing late payment fine fees penalty is not effective.');
+    ELSE
+        DBMS_OUTPUT.PUT_LINE('The late payment cases have no changes between 2023 and 2024.');
+        DBMS_OUTPUT.PUT_LINE('This shows that issuing late payment fine fees penalty has no effect.');
+    END IF;
+
+    DBMS_OUTPUT.PUT_LINE('Grand Total Late Payment Cases for 2023 and 2024: ' || v_grandTotalCases);
+END;
+/
+
+EXEC report2_kjq;

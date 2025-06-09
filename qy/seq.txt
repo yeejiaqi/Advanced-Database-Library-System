@@ -1,0 +1,27 @@
+DECLARE
+  l_max   NUMBER;
+BEGIN
+  -- Find the highest numeric portion already in Reserve table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(ReserveID, 3))), 0)
+    INTO l_max
+    FROM Reserve;
+
+  -- Drop the sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_reserve_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN  -- sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create the sequence starting from (max + 1)
+  EXECUTE IMMEDIATE '
+    CREATE SEQUENCE seq_reserve_id
+      START WITH ' || (l_max + 1) || '
+      INCREMENT BY 1
+      NOCACHE
+      NOCYCLE';
+END;
+/

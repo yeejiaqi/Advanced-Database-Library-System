@@ -1,0 +1,35 @@
+DROP INDEX idx_book_genre;
+CREATE INDEX idx_book_genre ON book(Genre);
+
+-- View
+CREATE OR REPLACE VIEW v_BookFrequentBorrow AS
+SELECT bk.Genre, bk.BookTitle, bd.BookCopyID
+FROM borrowDetails bd
+JOIN borrow b ON bd.BorrowID = b.BorrowID
+JOIN bookCopy bc ON bd.BookCopyID = bc.bookCopyID
+JOIN book bk ON bc.BookID = bk.BookID;
+
+
+-- Display
+SET LINESIZE 61
+SET PAGESIZE 30
+
+COLUMN Genre FORMAT A12 HEADING 'Genre'
+COLUMN BookTitle FORMAT A35 HEADING 'Book Title'
+COLUMN BorrowCount FORMAT 999 HEADING 'Borrow Count'
+
+TTITLE CENTER 'Books Frequently Borrowed' -
+       RIGHT 'Page ' FORMAT 999 SQL.PNO SKIP 2
+
+BREAK ON Genre SKIP PAGE
+COMPUTE SUM LABEL 'Total Books Borrowed:' OF BorrowCount ON Genre
+
+SELECT 
+    Genre, 
+    BookTitle, 
+    COUNT(*) AS BorrowCount
+FROM v_BookFrequentBorrow
+GROUP BY Genre, BookTitle
+ORDER BY Genre, BorrowCount DESC;
+
+TTITLE OFF

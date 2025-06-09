@@ -1,0 +1,102 @@
+SET SERVEROUTPUT ON
+SET LINESIZE 200
+cl scr
+DROP SEQUENCE seq_Payment;
+CREATE SEQUENCE seq_Payment
+MINVALUE 327
+MAXVALUE 999999
+START WITH 327
+INCREMENT BY 1
+NOCACHE;
+
+CREATE OR REPLACE PROCEDURE makePayment(v_fineID IN Fine.FineID%TYPE, v_userID IN LibraryUser.UserID%TYPE, v_pymtMethod IN Payment.PaymentMethod%TYPE)
+IS
+    e_invalid_fineID EXCEPTION;
+    e_invalid_userID EXCEPTION;
+    e_invalid_paymentMethod EXCEPTION;
+    e_invalid_fineStatus EXCEPTION;
+    v_paymentID Fine.PaymentID%TYPE;
+    v_idNum number(10,0):=0;
+    v_days number(10,0):=0;
+    v_charged number(6,2) :=0;
+    v_total number(6,2) :=0;
+    v_reason Fine.FineReason%TYPE;
+    v_due Fine.FineDueDate%TYPE;
+    v_status Fine.FineStatus%TYPE;
+    user_valid BOOLEAN := FALSE;
+    v_valid BOOLEAN :=TRUE;
+BEGIN
+    BEGIN
+        SELECT FineDueDate, FineStatus, PaymentID, FineCharged, TotalFineToBePaid, FineReason 
+        INTO v_due, v_status, v_paymentID, v_charged, v_total, v_reason
+        FROM Fine WHERE FineID = v_fineID;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            v_valid:= FALSE;
+            RAISE e_invalid_fineID;
+    END;
+    BEGIN
+        SELECT FineReason INTO v_reason FROM Fine F JOIN BorrowDetails D ON F.FineID = D.FineID
+        JOIN Borrow B ON D.BorrowID = B.BorrowID 
+        JOIN LibraryUser L ON B.UserID = L.UserID
+        WHERE L.UserID=v_userID AND F.FineID = v_fineID; 
+        user_valid := TRUE;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            BEGIN 
+                SELECT FineReason INTO v_reason FROM Fine F JOIN FacilityBooking B ON F.FineID=B.FineID
+                WHERE B.UserID = v_userID AND F.FineID=v_fineID;
+                user_valid := TRUE;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    v_valid:= FALSE;
+                    RAISE e_invalid_userID;
+            END;
+    END;
+
+    
+    IF v_status='PENDING' AND v_paymentID IS NULL THEN
+        IF SYSDATE>v_due+14 THEN
+            v_reason:=v_reason||'+LATE_FINE_REPAY';
+            v_charged:=v_charged+14;
+            v_total:=v_total+14;
+            v_status:='OVERDUE';
+            UPDATE LibraryUser SET UserAccountStatus = 'BLACKLISTED' WHERE UserID=v_userID;
+        ELSIF SYSDATE>v_due THEN
+            v_reason:=v_reason||'+LATE_FINE_REPAY';
+            v_days := GREATEST(0, SYSDATE - v_due);
+            v_charged:=v_charged+v_days;
+            v_total:=v_total+v_days;
+            v_status:='OVERDUE';
+        ELSE
+            v_status:='SETTLED';
+        END IF;
+        IF v_pymtMethod NOT IN ('CASH','CARD','BANK','E-WALLET') THEN
+            v_valid:= FALSE;
+            RAISE e_invalid_paymentMethod;
+        END IF;
+        IF v_valid = TRUE THEN
+            v_idNum :=seq_Payment.nextVal;
+            v_paymentID := 'PY' || LPAD(v_idNum, 5, '0');
+            INSERT INTO Payment VALUES (v_paymentID,v_pymtMethod, DEFAULT);
+            UPDATE Fine SET FineReason=v_reason, FineCharged=v_charged, TotalFineToBePaid=v_total, FineStatus=v_status, PaymentID = v_paymentID WHERE FineID=v_fineID;
+            DBMS_OUTPUT.PUT_LINE ('Payment Made Successfully!');
+        END IF;
+    ELSE
+        v_valid:= FALSE;
+        RAISE e_invalid_fineStatus;
+    END IF;
+
+    EXCEPTION
+        WHEN e_invalid_fineID THEN
+            DBMS_OUTPUT.PUT_LINE ('Fine ID not found.');
+        WHEN e_invalid_userID THEN 
+            DBMS_OUTPUT.PUT_LINE ('You are not the user for this fine record.');
+        WHEN e_invalid_paymentMethod THEN
+            DBMS_OUTPUT.PUT_LINE ('Invalid Payment Method. Should be CASH, CARD, BANK or E-WALLET.');
+        WHEN e_invalid_fineStatus THEN
+            DBMS_OUTPUT.PUT_LINE ('This fine cannot be paid.');
+END;
+/
+
+

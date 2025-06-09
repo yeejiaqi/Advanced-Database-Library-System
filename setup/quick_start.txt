@@ -1,0 +1,2 @@
+@create_table.txt
+@insert_table.txt

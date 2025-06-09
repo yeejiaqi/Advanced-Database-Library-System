@@ -1,0 +1,61 @@
+cl scr
+
+CREATE INDEX idx_reserve_status_dates
+    ON Reserve (ReserveStatus, EstPickupAvailableStartDate, EstPickupAvailableDueDate);
+
+-- STEP 2: CREATE OR REPLACE VIEW FOR UPCOMING BOOK PICKUPS
+CREATE OR REPLACE VIEW v_UpcomingPickupBooks AS
+WITH ReserveBookCounts AS (
+    SELECT 
+        r.ReserveID,
+        COUNT(rd.BookCopyID) AS NumberOfBooks
+    FROM Reserve r
+    JOIN ReserveDetails rd ON r.ReserveID = rd.ReserveID
+    GROUP BY r.ReserveID
+)
+SELECT 
+    u.UserID,
+    u.UserName, 
+    u.UserEmail,
+    NVL(rbc.NumberOfBooks, 0) AS NumberOfBooks,
+    TO_CHAR(r.EstPickupAvailableStartDate, 'DD-MON-YYYY') AS StartDate,
+    TO_CHAR(r.EstPickupAvailableDueDate, 'DD-MON-YYYY') AS DueDate,
+    TRUNC(r.EstPickupAvailableDueDate - SYSDATE + 1) AS DayLeftToCollect,
+    CASE 
+        WHEN TRUNC(r.EstPickupAvailableDueDate - SYSDATE + 1) = 0 THEN 'Due Today'
+        WHEN TRUNC(r.EstPickupAvailableDueDate - SYSDATE + 1) = 1 THEN 'Urgent'
+        WHEN TRUNC(r.EstPickupAvailableDueDate - SYSDATE + 1) <= 3 THEN 'Due Soon'
+        ELSE 'Upcoming'
+    END AS UrgencyStatus
+FROM 
+    Reserve r
+JOIN 
+    LibraryUser u ON r.UserID = u.UserID
+LEFT JOIN 
+    ReserveBookCounts rbc ON r.ReserveID = rbc.ReserveID
+WHERE 
+    r.ReserveStatus = 'READYTOCOLLECT'
+    AND SYSDATE BETWEEN r.EstPickupAvailableStartDate AND r.EstPickupAvailableDueDate;
+
+-- STEP 3: DISPLAY SETTINGS FOR FORMATTING REPORT OUTPUT
+SET LINESIZE 160
+SET PAGESIZE 50
+
+COLUMN UserID           FORMAT A10   HEADING 'User ID'
+COLUMN UserName         FORMAT A25   HEADING 'Name'
+COLUMN UserEmail        FORMAT A30   HEADING 'Email'
+COLUMN NumberOfBooks    FORMAT 999   HEADING 'Number of Books'
+COLUMN StartDate        FORMAT A12   HEADING 'Start Date'
+COLUMN DueDate          FORMAT A12   HEADING 'Due Date'
+COLUMN DayLeftToCollect FORMAT 999   HEADING 'Day Left'
+COLUMN UrgencyStatus    FORMAT A12   HEADING 'Urgency'
+
+-- STEP 4: DETAILED USER REPORT
+TTITLE CENTER '*** List of Users with Upcoming Book Pickups ***' SKIP 2
+
+SELECT *
+FROM v_UpcomingPickupBooks
+ORDER BY DayLeftToCollect ASC, UserID;
+
+
+TTITLE OFF

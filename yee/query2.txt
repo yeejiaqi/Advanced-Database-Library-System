@@ -1,0 +1,78 @@
+-- QUERY 2 ADVANCED SEARCH BOOK OPTIONS BASED ON CRITERIA (TITLE, AUTHOR, GENRE, PUBLICATION YEAR, POPULARITY)
+
+CREATE OR REPLACE VIEW v_AdvancedBookSearch AS
+SELECT
+  b.BookID,
+  b.BookTitle,
+  b.BookAuthor,
+  b.Genre,
+  b.PublicationYear,
+  COUNT(bc.BookCopyID) AS TotalCopy,
+  COUNT(bd.BorrowID) AS Popularity
+FROM Book b
+LEFT JOIN BookCopy bc
+  ON b.BookID = bc.BookID
+LEFT JOIN borrowDetails bd
+  ON bc.BookCopyID = bd.BookCopyID
+GROUP BY
+  b.BookID, b.BookTitle, b.BookAuthor, b.Genre, b.PublicationYear;
+
+
+SET LINESIZE 150
+SET PAGESIZE 200
+SET VERIFY   OFF
+SET FEEDBACK OFF
+
+COLUMN matched_by        FORMAT A20 HEADING 'MATCHED BY'
+COLUMN BookID            FORMAT A08  HEADING 'BOOKID'
+COLUMN BookTitle         FORMAT A30  HEADING 'BOOK TITLE'
+COLUMN BookAuthor        FORMAT A25  HEADING 'AUTHOR'
+COLUMN Genre             FORMAT A15  HEADING 'GENRE'
+COLUMN PublicationYear   FORMAT 9999  HEADING 'PUBLICATION YEAR'
+COLUMN TotalCopy         FORMAT 999   HEADING 'TOTAL COPY'
+COLUMN Popularity        FORMAT 999   HEADING 'POPULARITY'
+
+PROMPT ====================================================================================
+PROMPT Advanced Book Search (title, author, genre, year, popularity)
+PROMPT ====================================================================================
+ACCEPT search_term CHAR PROMPT 'Enter search keyword: ' 
+
+BREAK ON matched_by SKIP PAGE                         
+TTITLE CENTER '-----ADVANCED SEARCH BOOK FOR POPULARITY SUMMARY-----'
+
+SELECT
+  matched_by,
+  BookID,
+  BookTitle,
+  BookAuthor,
+  Genre,
+  PublicationYear,
+  TotalCopy,
+  Popularity
+FROM (
+  SELECT 'Author' AS matched_by, vabs.* 
+    FROM v_AdvancedBookSearch vabs
+   WHERE LOWER(BookAuthor) LIKE '%' || LOWER('&search_term') || '%'
+  UNION ALL
+  SELECT 'Title' AS matched_by, vabs.*
+    FROM v_AdvancedBookSearch vabs
+   WHERE LOWER(BookTitle) LIKE '%' || LOWER('&search_term') || '%'
+  UNION ALL
+  SELECT 'Genre' AS matched_by, vabs.*
+    FROM v_AdvancedBookSearch vabs
+   WHERE LOWER(Genre) LIKE '%' || LOWER('&search_term') || '%'
+  UNION ALL
+  SELECT 'Publication Year' AS matched_by, vabs.*
+    FROM v_AdvancedBookSearch vabs
+   WHERE TO_CHAR(PublicationYear) LIKE '%' || '&search_term' || '%'
+  UNION ALL
+  SELECT 'Popularity' AS matched_by, vabs.*
+    FROM v_AdvancedBookSearch vabs
+   WHERE TO_CHAR(Popularity) LIKE '%' || '&search_term' || '%'
+)
+ORDER BY
+  DECODE(matched_by,'Author',1,'Title',2,'Genre',3,'Publication Year',4,'Popularity',5),BookTitle;
+
+TTITLE OFF
+SET VERIFY ON
+SET FEEDBACK ON

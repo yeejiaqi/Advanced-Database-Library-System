@@ -1,0 +1,10 @@
+DROP TABLE TimeSlot;
+
+CREATE TABLE TimeSlot (
+    TimeSlotID      CHAR(7)         NOT NULL,
+    StartTime       TIMESTAMP       NOT NULL,
+    EndTime         TIMESTAMP       NOT NULL,
+    CONSTRAINT pk_ts_TimeSlotID PRIMARY KEY (TimeSlotID),
+    CONSTRAINT chk_ts_ID CHECK (REGEXP_LIKE(TimeSlotID, '^TS([0-9]{5})+$')),
+    CONSTRAINT chk_ts_Time CHECK (EndTime > StartTime)
+);

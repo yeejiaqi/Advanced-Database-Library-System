@@ -1,0 +1,147 @@
+SET SERVEROUTPUT ON;
+SET LINESIZE 200;
+cl scr
+
+
+DROP INDEX idx_reserve_user_year;
+
+-- Composite index for user and year
+CREATE INDEX idx_reserve_user_year ON Reserve(UserID, EXTRACT(YEAR FROM ReserveDateTime));
+
+CREATE OR REPLACE PROCEDURE prc_YearlyReserveReport(p_year IN NUMBER) IS
+    v_TotalBooksResv NUMBER := 0;
+    v_TotalResv NUMBER := 0;
+    v_UsersTotal NUMBER := 0;
+
+    v_None NUMBER := 0;
+    v_Basic NUMBER := 0;
+    v_Standard NUMBER := 0;
+    v_Premium NUMBER := 0;
+
+    v_reserved NUMBER := 0;
+    v_ready NUMBER := 0;
+    v_collected NUMBER := 0;
+    v_expired NUMBER := 0;
+    v_failed NUMBER := 0;
+    v_cancelled NUMBER := 0;
+    v_delayed NUMBER := 0;
+
+    v_seq NUMBER := 1;
+
+    -- Outer cursor: get distinct users who made reservations in the year, sorted by first reservation date
+    CURSOR user_cursor IS
+        SELECT DISTINCT r.UserID,
+                        NVL(u.UserName, '[UNKNOWN]') AS UserName,
+                        NVL(u.MembershipType, 'NONE') AS MembershipType,
+                        MIN(r.ReserveDateTime) AS FirstReserveDate
+        FROM Reserve r
+        LEFT JOIN LibraryUser u ON r.UserID = u.UserID
+        WHERE EXTRACT(YEAR FROM r.ReserveDateTime) = p_year
+        GROUP BY r.UserID, u.UserName, u.MembershipType
+        ORDER BY MIN(r.ReserveDateTime);
+
+    -- Inner cursor: for a given user, get all their reservations in that year, sorted by date
+    CURSOR res_cursor(p_userid VARCHAR2) IS
+        SELECT 
+            r.ReserveDateTime,
+            r.ReserveStatus,
+            COUNT(rd.BookCopyID) AS ReservedBooks
+        FROM Reserve r
+        JOIN ReserveDetails rd ON r.ReserveID = rd.ReserveID
+        WHERE r.UserID = p_userid
+          AND EXTRACT(YEAR FROM r.ReserveDateTime) = p_year
+        GROUP BY r.ReserveDateTime, r.ReserveStatus
+        ORDER BY r.ReserveDateTime;
+
+    u_rec user_cursor%ROWTYPE;
+    r_rec res_cursor%ROWTYPE;
+
+BEGIN
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || '======================================= Reservation Report for Year ' || p_year || ' ========================================');
+    DBMS_OUTPUT.PUT_LINE('+------+----------+----------------------------+--------------+--------------+----------------+-----------------+');
+    DBMS_OUTPUT.PUT_LINE('| No.  | UserID   | Name                       | Membership   | Reserve Date | Status         | Books Reserved  |');
+    DBMS_OUTPUT.PUT_LINE('+------+----------+----------------------------+--------------+--------------+----------------+-----------------+');
+
+    OPEN user_cursor;
+    LOOP
+        FETCH user_cursor INTO u_rec;
+        EXIT WHEN user_cursor%NOTFOUND;
+
+        -- Count the user
+        v_UsersTotal := v_UsersTotal + 1;
+
+        -- Membership breakdown
+        CASE u_rec.MembershipType
+            WHEN 'NONE' THEN v_None := v_None + 1;
+            WHEN 'BASIC' THEN v_Basic := v_Basic + 1;
+            WHEN 'STANDARD' THEN v_Standard := v_Standard + 1;
+            WHEN 'PREMIUM' THEN v_Premium := v_Premium + 1;
+        END CASE;
+
+        -- Nested reservation records for this user
+        OPEN res_cursor(u_rec.UserID);
+        LOOP
+            FETCH res_cursor INTO r_rec;
+            EXIT WHEN res_cursor%NOTFOUND;
+
+            DBMS_OUTPUT.PUT_LINE(
+                '| ' || LPAD(v_seq, 4) || ' | ' ||
+                RPAD(u_rec.UserID, 8) || ' | ' ||
+                RPAD(u_rec.UserName, 26) || ' | ' ||
+                RPAD(u_rec.MembershipType, 12) || ' | ' ||
+                TO_CHAR(r_rec.ReserveDateTime, 'YYYY-MM-DD') || '   | ' ||
+                RPAD(r_rec.ReserveStatus, 14) || ' | ' ||
+                LPAD(r_rec.ReservedBooks, 15) || ' |'
+            );
+
+            v_TotalBooksResv := v_TotalBooksResv + r_rec.ReservedBooks;
+            v_TotalResv := v_TotalResv + 1;
+            v_seq := v_seq + 1;
+
+            -- Status breakdown
+            CASE r_rec.ReserveStatus
+                WHEN 'RESERVED' THEN v_reserved := v_reserved + 1;
+                WHEN 'READYTOCOLLECT' THEN v_ready := v_ready + 1;
+                WHEN 'COLLECTED' THEN v_collected := v_collected + 1;
+                WHEN 'EXPIRED' THEN v_expired := v_expired + 1;
+                WHEN 'FAILED' THEN v_failed := v_failed + 1;
+                WHEN 'CANCELLED' THEN v_cancelled := v_cancelled + 1;
+                WHEN 'DELAYED' THEN v_delayed := v_delayed + 1;
+            END CASE;
+        END LOOP;
+        CLOSE res_cursor;
+
+    END LOOP;
+    CLOSE user_cursor;
+
+    DBMS_OUTPUT.PUT_LINE('+------+----------+----------------------------+--------------+--------------+----------------+-----------------+');
+
+    -- SUMMARY SECTION
+    DBMS_OUTPUT.PUT_LINE(CHR(1));
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 113, '=')); 
+    DBMS_OUTPUT.PUT_LINE('SUMMARY');
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 113, '-'));
+    DBMS_OUTPUT.PUT_LINE('Total Users with Reservations     : ' || v_UsersTotal);
+    DBMS_OUTPUT.PUT_LINE('Total Reservations Made           : ' || v_TotalResv);
+    DBMS_OUTPUT.PUT_LINE('Total Books Reserved              : ' || v_TotalBooksResv);
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 113, '='));
+    DBMS_OUTPUT.PUT_LINE('Total Users in Each Membership Type');
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 113, '-'));
+    DBMS_OUTPUT.PUT_LINE('  NONE      : ' || v_None);
+    DBMS_OUTPUT.PUT_LINE('  BASIC     : ' || v_Basic);
+    DBMS_OUTPUT.PUT_LINE('  STANDARD  : ' || v_Standard);
+    DBMS_OUTPUT.PUT_LINE('  PREMIUM   : ' || v_Premium);
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 113, '='));
+    DBMS_OUTPUT.PUT_LINE('Reservation Status Breakdown');
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 113, '-'));
+    DBMS_OUTPUT.PUT_LINE('  RESERVED        : ' || v_reserved);
+    DBMS_OUTPUT.PUT_LINE('  READYTOCOLLECT  : ' || v_ready);
+    DBMS_OUTPUT.PUT_LINE('  COLLECTED       : ' || v_collected);
+    DBMS_OUTPUT.PUT_LINE('  EXPIRED         : ' || v_expired);
+    DBMS_OUTPUT.PUT_LINE('  FAILED          : ' || v_failed);
+    DBMS_OUTPUT.PUT_LINE('  CANCELLED       : ' || v_cancelled);
+    DBMS_OUTPUT.PUT_LINE('  DELAYED         : ' || v_delayed);
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 113, '='));
+
+END;
+/

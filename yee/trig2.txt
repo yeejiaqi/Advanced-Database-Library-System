@@ -1,0 +1,93 @@
+--Trigger 2: Auto Assign Fine When The Post Usage Condition of Facility is NOT in Good Condition--
+
+CREATE OR REPLACE TRIGGER trg_AsgnFineAfterCheckout
+  BEFORE UPDATE OF FacilityPostUsageCondition ON FacilityBooking
+  FOR EACH ROW
+  WHEN (
+    NEW.FacilityPostUsageCondition IN ('DIRTY','DEFECTIVE')
+    AND NVL(OLD.FacilityPostUsageCondition,'X')
+        <> NEW.FacilityPostUsageCondition
+  )
+DECLARE
+  v_seq_val    NUMBER;
+  v_newFineID  FacilityBooking.FineID%TYPE;
+  v_fineCharged NUMBER(7,2);
+  v_discount        NUMBER(7,2)    := 0;
+  v_total           NUMBER(7,2);
+  v_mtype           VARCHAR2(8);
+BEGIN
+
+  IF :NEW.FacilityPostUsageCondition = 'DIRTY' THEN
+    v_fineCharged := 15.00;
+  ELSIF :NEW.FacilityPostUsageCondition = 'DEFECTIVE' THEN
+    v_fineCharged := 100.00;
+  END IF;
+
+  -- get next sequence value
+  SELECT seq_Fine.NEXTVAL
+    INTO v_seq_val
+    FROM DUAL;
+
+  -- format new FineID
+  v_newFineID := 'FN' || LPAD(v_seq_val, 5, '0');
+
+  -- find latest membership for this user
+  BEGIN
+    SELECT CurrentMembershipType
+      INTO v_mtype
+      FROM (
+        SELECT CurrentMembershipType
+          FROM MembershipActivity
+         WHERE UserID = :NEW.UserID
+         ORDER BY ActivityDate DESC
+      )
+      WHERE ROWNUM = 1;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      v_mtype := 'NONE';
+  END;
+
+  -- compute discount
+  CASE v_mtype
+    WHEN 'BASIC'    THEN v_discount := 1.00;
+    WHEN 'STANDARD' THEN v_discount := 3.00;
+    WHEN 'PREMIUM'  THEN v_discount := 5.00;
+    ELSE                 v_discount := 0.00;
+  END CASE;
+
+  -- total to be paid
+  v_total := v_fineCharged - v_discount;
+
+  -- insert the parent fine record (so FK is satisfied)
+  INSERT INTO Fine(
+    FineID,
+    FineType,
+    FineReason,
+    FineIssuedDate,
+    FineDueDate,
+    FineCharged,
+    FineDiscountAmount,
+    TotalFineToBePaid,
+    FineStatus,
+    PaymentID
+  ) VALUES (
+    v_newFineID,
+    'ROOMFINE', 
+    'CONDITION',    
+    SYSDATE,
+    SYSDATE+7,
+    v_fineCharged,
+    v_discount,
+    v_total,
+    'PENDING',
+    NULL
+  );
+
+  -- assign newly created FineID to booking
+  :NEW.FineID := v_newFineID;
+
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE_APPLICATION_ERROR(-20099,'Unexpected error in trg_AssignFineAfterCheckout: '|| SQLCODE || '/' || SUBSTR(SQLERRM,1,200));
+END trg_AssignFineAfterCheckout;
+/

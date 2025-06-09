@@ -1,0 +1,28 @@
+DROP TABLE FacilityBooking;
+CREATE TABLE FacilityBooking(
+    FBookingID                          CHAR(7)         NOT NULL, 
+    UserID                              CHAR(7)         NOT NULL,
+    FacilityID                          CHAR(7)         NOT NULL,
+    TimeSlotID                          CHAR(7)         NOT NULL,
+    FineID                              CHAR(7)         NULL,                 
+    BookingDate                         DATE            DEFAULT SYSDATE     NOT NULL,
+    CheckInTime                         TIMESTAMP       NULL,
+    CheckOutTime                        TIMESTAMP       NULL,
+    BookingStatus                       VARCHAR2(15)     DEFAULT 'BOOKED' NOT NULL,
+    FacilityPostUsageCondition          VARCHAR2(9)     NULL,
+    NumberOfParticipants                NUMBER(3,0)       DEFAULT 1        NOT NULL,
+    CONSTRAINT pk_fb_FBookingID PRIMARY KEY (FBookingID),
+    CONSTRAINT chk_fb_userID_fk FOREIGN KEY (UserID) REFERENCES LibraryUser(UserID),
+    CONSTRAINT chk_fb_facilityID_fk FOREIGN KEY (FacilityID) REFERENCES Facility(FacilityID),
+    CONSTRAINT chk_fb_timeSlotID_fk FOREIGN KEY (TimeSlotID) REFERENCES TimeSlot(TimeSLotID),
+    CONSTRAINT chk_fb_fineID_fk FOREIGN KEY (FineID) REFERENCES Fine(FineID),
+    CONSTRAINT chk_fb_fbID CHECK (REGEXP_LIKE(FBookingID, '^FB([0-9]{5})+$')),
+    CONSTRAINT chk_fb_checkoutTime CHECK ((CheckInTime IS NOT NULL AND CheckOutTime IS NOT NULL AND CheckOutTime > CheckInTime) OR (CheckInTIme IS NULL AND CheckOutTIme IS NULL) OR (CheckInTIme IS NOT NULL AND CheckOutTIme IS NULL)),
+    CONSTRAINT chk_fb_bookingStatus CHECK (BookingStatus IN ('BOOKED', 'CANCELLED', 'FAILED', 'EXPIRED', 'COMPLETED', 'INPROGRESS')),
+    CONSTRAINT chk_fb_BookingStatus_Time CHECK ((BookingStatus IN('COMPLETED') AND CheckInTime IS NOT NULL AND CheckOutTime IS NOT NULL) OR
+  (BookingStatus IN ('INPROGRESS') AND CheckInTime IS NOT NULL AND CheckOutTime IS NULL) OR (BookingStatus IN ('BOOKED', 'CANCELLED', 'FAILED', 'EXPIRED') AND CheckInTime IS NULL AND CheckOutTime IS NULL)),
+    CONSTRAINT chk_fb_Usage_Status_Fine CHECK((NOT(BookingStatus = 'COMPLETED')) OR (FacilityPostUsageCondition = 'GOOD'AND FineID IS NULL) OR (FacilityPostUsageCondition IN ('DIRTY','DEFECTIVE')AND FineID IS NOT NULL)),
+    CONSTRAINT check_fb_UsageCondition CHECK (FacilityPostUsageCondition IN ('GOOD', 'DEFECTIVE', 'DIRTY')),
+    CONSTRAINT chk_fb_BookingStatus_Cond CHECK ((BookingStatus IN ('COMPLETED') AND FacilityPostUsageCondition IN ('GOOD', 'DEFECTIVE', 'DIRTY')) OR (NOT (BookingStatus IN( 'COMPLETED')) AND FacilityPostUsageCondition IS NULL)),
+    CONSTRAINT chk_fb_numOfParticipant CHECK (NumberOfParticipants BETWEEN 1 AND 25)
+);

@@ -1,0 +1,202 @@
+DECLARE
+  l_max   NUMBER;
+BEGIN
+  -- Find the highest numeric portion already in Reserve table
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(ReserveID, 3))), 0)
+    INTO l_max
+    FROM Reserve;
+
+  -- Drop the sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_reserve_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN  -- sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create the sequence starting from (max + 1)
+  EXECUTE IMMEDIATE '
+    CREATE SEQUENCE seq_reserve_id
+      START WITH ' || (l_max + 1) || '
+      INCREMENT BY 1
+      NOCACHE
+      NOCYCLE';
+END;
+/
+
+CREATE OR REPLACE PROCEDURE sp_ReserveBooks (
+    p_UserID CHAR,
+    p_BookCopyIDs SYS.ODCIVARCHAR2LIST
+)
+IS
+    v_ActiveReservation NUMBER;
+    v_UnavailableCount NUMBER := 0;
+    v_ReserveID CHAR(7);
+    v_Status VARCHAR2(20);
+    v_StartDate DATE;
+    v_DueDate DATE;
+    v_MaxReturnDueDate DATE := NULL;
+    v_valid BOOLEAN:= TRUE;
+
+    -- Variables for fine and account status checks
+    v_UserAccStatus VARCHAR2(20);
+BEGIN
+
+    -- OVERDUE FINE CHECK and BLACKLIST
+
+    DECLARE
+        v_HasOverdueFine NUMBER := 0;
+    BEGIN
+        -- Check via Borrow path
+        SELECT COUNT(*)
+        INTO v_HasOverdueFine
+        FROM Fine F
+        JOIN BorrowDetails BD ON F.FineID = BD.FineID
+        JOIN Borrow B ON BD.BorrowID = B.BorrowID
+        WHERE B.UserID = p_UserID
+          AND F.FineStatus = 'PENDING'
+          AND F.FineDueDate + 14 < SYSDATE;
+
+        -- If not found, check via FacilityBooking path
+        IF v_HasOverdueFine = 0 THEN
+            SELECT COUNT(*)
+            INTO v_HasOverdueFine
+            FROM Fine F
+            JOIN FacilityBooking FB ON F.FineID = FB.FineID
+            WHERE FB.UserID = p_UserID
+              AND F.FineStatus = 'PENDING'
+              AND F.FineDueDate + 14 < SYSDATE;
+        END IF;
+
+        -- If overdue fines exist, blacklist user
+        IF v_HasOverdueFine > 0 THEN
+            -- Blacklist user
+            UPDATE LibraryUser
+            SET UserAccountStatus = 'BLACKLISTED'
+            WHERE TRIM(UserID) = TRIM(p_UserID);
+
+            COMMIT;
+            v_valid := FALSE;
+            RAISE_APPLICATION_ERROR(-20010, 'User has overdue fines for more than 2 weeks and is now blacklisted.');
+        END IF;
+    END;
+
+ 
+    -- USER ACCOUNT STATUS CHECK
+
+    SELECT UserAccountStatus INTO v_UserAccStatus
+    FROM LibraryUser
+    WHERE UserID = p_UserID;
+
+    IF v_UserAccStatus = 'BLACKLISTED' THEN
+        v_valid := FALSE;
+        RAISE_APPLICATION_ERROR(-20011, 'User is blacklisted and cannot reserve books.');
+    ELSIF v_UserAccStatus = 'TERMINATED' THEN
+        v_valid := FALSE;
+        RAISE_APPLICATION_ERROR(-20012, 'The user account has been terminated.');
+    END IF;
+
+    -- CHECK IF USER ALREADY HAS AN ACTIVE RESERVATION
+    SELECT COUNT(*)
+    INTO v_ActiveReservation
+    FROM Reserve
+    WHERE TRIM(UserID) = TRIM(p_UserID)
+    AND ReserveStatus IN ('RESERVED', 'DELAYED', 'READYTOCOLLECT');
+
+    IF v_ActiveReservation > 0 THEN
+        v_valid := FALSE;
+        RAISE_APPLICATION_ERROR(-20013, 'User already has an active reservation.');
+    END IF;
+
+  
+    -- CHECK BOOK AVAILABILITY
+
+    FOR i IN 1 .. p_BookCopyIDs.COUNT LOOP
+        DECLARE
+            v_BookStatus VARCHAR2(20);
+            v_ReturnDue DATE;
+        BEGIN
+            SELECT BookStatus INTO v_BookStatus
+            FROM BookCopy
+            WHERE BookCopyID = p_BookCopyIDs(i);
+
+            IF v_BookStatus = 'BORROWED' THEN
+                SELECT MAX(OriBookLoanDueDate) INTO v_ReturnDue
+                FROM BorrowDetails
+                WHERE BookCopyID = p_BookCopyIDs(i);
+
+                IF v_MaxReturnDueDate IS NULL OR v_ReturnDue > v_MaxReturnDueDate THEN
+                    v_MaxReturnDueDate := v_ReturnDue;
+                END IF;
+
+                v_UnavailableCount := v_UnavailableCount + 1;
+
+            ELSIF v_BookStatus = 'RESERVED' THEN
+                v_valid := FALSE;
+                RAISE_APPLICATION_ERROR(-20003, 'One or more books are already reserved.');
+
+            ELSIF v_BookStatus = 'AVAILABLE' THEN
+                NULL; -- Do nothing
+
+            ELSE
+                v_valid := FALSE;
+                RAISE_APPLICATION_ERROR(-20004, 'Invalid book status detected.');
+            END IF;
+        END;
+    END LOOP;
+
+
+    -- DETERMINE STATUS and PICKUP DATES
+    IF v_UnavailableCount = 0 THEN
+        v_Status := 'READYTOCOLLECT';
+        v_StartDate := SYSDATE;
+        v_DueDate := v_StartDate + 3;
+    ELSE
+        v_Status := 'RESERVED';
+        IF v_MaxReturnDueDate IS NOT NULL THEN
+            v_StartDate := v_MaxReturnDueDate + 1;
+            v_DueDate := v_StartDate + 3;
+        ELSE
+            v_valid := FALSE;
+            RAISE_APPLICATION_ERROR(-20005, 'Missing return due date for borrowed books.');
+        END IF;
+    END IF;
+
+    -- GENERATE NEW RESERVE ID USING SEQUENCE
+    IF (v_valid = TRUE) THEN
+        SELECT 'RS' || LPAD(seq_reserve_id.NEXTVAL, 5, '0')
+        INTO v_ReserveID
+        FROM DUAL;
+
+    -- INSERT NEW RECORD INTO RESERVE
+  
+        INSERT INTO Reserve (
+            ReserveID, ReserveDateTime,
+            EstPickupAvailableStartDate, EstPickupAvailableDueDate,
+            ReserveStatus, UserID
+        ) VALUES (
+            v_ReserveID, SYSDATE,
+            v_StartDate, v_DueDate,
+            v_Status, p_UserID
+        );
+
+
+        -- INSERT INTO RESERVEDETAILS and UPDATE BOOKCOPY
+
+        FOR i IN 1 .. p_BookCopyIDs.COUNT LOOP
+            INSERT INTO ReserveDetails (ReserveID, BookCopyID, ReadyToPickUp)
+            VALUES (
+                v_ReserveID,
+                p_BookCopyIDs(i),
+                CASE WHEN v_Status = 'READYTOCOLLECT' THEN 'T' ELSE 'F' END
+            );
+
+            UPDATE BookCopy
+            SET BookStatus = 'RESERVED'
+            WHERE BookCopyID = p_BookCopyIDs(i);
+        END LOOP;
+    END IF;
+END;
+/

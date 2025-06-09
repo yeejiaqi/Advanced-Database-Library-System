@@ -1,0 +1,47 @@
+-- Index
+CREATE INDEX idx_fb_status ON FacilityBooking(BookingStatus);
+
+-- View
+CREATE OR REPLACE VIEW v_FacilityUsageTimeSlot AS
+SELECT
+    TO_CHAR(t.StartTime, 'HH24:MI') || ' - ' || TO_CHAR(t.EndTime, 'HH24:MI') AS TimeSlotRange,
+    f.FacilityID,
+    f.FacilityType,
+    f.Capacity,
+    COUNT(*) AS TotalBookings
+FROM 
+    FacilityBooking fb
+    JOIN TimeSlot t ON fb.TimeSlotID = t.TimeSlotID
+    JOIN Facility f ON fb.FacilityID = f.FacilityID
+WHERE 
+    fb.BookingStatus = 'COMPLETED'
+GROUP BY 
+    TO_CHAR(t.StartTime, 'HH24:MI') || ' - ' || TO_CHAR(t.EndTime, 'HH24:MI'),
+    f.FacilityID, f.FacilityType, f.Capacity;
+
+-- Display
+SET LINESIZE 150
+SET PAGESIZE 40
+SET NEWPAGE 1
+TTITLE LEFT 'Facility Usage by Time Slot' 
+BREAK ON TimeSlotRange SKIP 1
+
+-- Column headers
+COLUMN TimeSlotRange FORMAT A20  HEADING 'Time Slot'
+COLUMN FacilityID     FORMAT A11 HEADING 'Facility ID'
+COLUMN FacilityType   FORMAT A20 HEADING 'Facility Type'
+COLUMN Capacity       FORMAT 999 HEADING 'Capacity'
+COLUMN TotalBookings  FORMAT 9999 HEADING 'Total Bookings'
+
+
+SELECT 
+    TimeSlotRange,
+    FacilityID,
+    FacilityType,
+    Capacity,
+    TotalBookings
+FROM 
+    v_FacilityUsageTimeSlot
+ORDER BY 
+    TimeSlotRange, TotalBookings DESC; 
+TTITLE OFF

@@ -1,0 +1,65 @@
+cl scr
+
+CREATE OR REPLACE VIEW v_UpcomingDueBooks AS
+WITH Upcoming AS (
+    SELECT 
+        u.UserID,
+        u.UserName,
+        u.UserEmail,
+        bc.BookCopyID,
+        b.BookTitle,
+        bd.LatestBookLoanDueDate AS LatestBookLoanDueDate,
+        TRUNC(bd.LatestBookLoanDueDate - SYSDATE + 1) AS DayLeft
+    FROM 
+        LibraryUser u
+    JOIN 
+        Borrow br ON u.UserID = br.UserID
+    JOIN 
+        BorrowDetails bd ON br.BorrowID = bd.BorrowID
+    JOIN 
+        BookCopy bc ON bd.BookCopyID = bc.BookCopyID
+    JOIN 
+        Book b ON bc.BookID = b.BookID
+    WHERE 
+        bd.LatestBookLoanDueDate BETWEEN SYSDATE AND SYSDATE + 3
+),
+Numbered AS (
+    SELECT 
+        a.*,
+        COUNT(*) OVER (PARTITION BY a.UserID) AS TotalBooks,
+        ROW_NUMBER() OVER (PARTITION BY a.UserID ORDER BY a.LatestBookLoanDueDate) AS RowNumPerUser
+    FROM Upcoming a
+)
+SELECT 
+    CASE WHEN RowNumPerUser = 1 THEN DENSE_RANK() OVER (ORDER BY UserID) END AS UserSeq,
+    CASE WHEN RowNumPerUser = 1 THEN UserName ELSE NULL END AS UserName,
+    CASE WHEN RowNumPerUser = 1 THEN UserEmail ELSE NULL END AS UserEmail,
+    CASE WHEN RowNumPerUser = 1 THEN TotalBooks ELSE NULL END AS TotalBooks,
+    BookCopyID,
+    BookTitle,
+    TO_CHAR(LatestBookLoanDueDate, 'YYYY-MM-DD') AS LatestBookLoanDueDate,
+    DayLeft
+FROM Numbered
+ORDER BY UserID, RowNumPerUser;
+
+-- Set formatting 
+SET LINESIZE 160
+SET PAGESIZE 30
+
+COLUMN UserSeq FORMAT 999 HEADING 'No.'
+COLUMN UserName FORMAT A30 HEADING 'Name'
+COLUMN UserEmail FORMAT A35 HEADING 'Email'
+COLUMN TotalBooks FORMAT 999 HEADING 'Books'
+COLUMN BookCopyID FORMAT A12 HEADING 'Book ID'
+COLUMN BookTitle FORMAT A35 HEADING 'Book Title'
+COLUMN LatestBookLoanDueDate FORMAT A12 HEADING 'Due Date'
+COLUMN DayLeft FORMAT 999 HEADING 'Days Left'
+
+-- Display title
+TTITLE CENTER '*** Upcoming Due Books in 3 Days ***' SKIP 2
+
+-- View Output
+SELECT * FROM v_UpcomingDueBooks
+WHERE DayLeft < 4;
+
+TTITLE OFF;

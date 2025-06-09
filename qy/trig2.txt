@@ -1,0 +1,42 @@
+CREATE OR REPLACE TRIGGER trg_reservation_delayed
+AFTER UPDATE OF BorrowStatus ON BorrowDetails
+FOR EACH ROW
+DECLARE
+    v_reserve_id Reserve.ReserveID%TYPE;
+BEGIN
+    IF :NEW.BorrowStatus = 'OVERDUE' THEN
+        BEGIN
+            -- Find the ReserveID with the latest ReserveDate for the updated BookCopyID
+            SELECT rd.ReserveID
+            INTO v_reserve_id
+            FROM ReserveDetails rd
+            JOIN Reserve r ON rd.ReserveID = r.ReserveID
+            WHERE rd.BookCopyID = :NEW.BookCopyID
+              AND r.ReserveDateTime = (
+                SELECT MAX(r2.ReserveDateTime)
+                FROM ReserveDetails rd2
+                JOIN Reserve r2 ON rd2.ReserveID = r2.ReserveID
+                WHERE rd2.BookCopyID = :NEW.BookCopyID
+              );
+
+            -- Debugging output
+            DBMS_OUTPUT.PUT_LINE('Trigger: Found ReserveID = ' || v_reserve_id);
+
+            -- Update the corresponding reservation if it is still RESERVED
+            UPDATE Reserve
+            SET ReserveStatus = 'DELAYED',
+                EstPickupAvailableStartDate = NULL,
+                EstPickupAvailableDueDate = NULL
+            WHERE ReserveID = v_reserve_id
+              AND ReserveStatus = 'RESERVED';
+
+            DBMS_OUTPUT.PUT_LINE('Trigger: Updated Reserve to DELAYED and cleared pickup dates');
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                DBMS_OUTPUT.PUT_LINE('Trigger: No matching reservation found.');
+            WHEN OTHERS THEN
+                DBMS_OUTPUT.PUT_LINE('Trigger Error: ' || SQLERRM);
+        END;
+    END IF;
+END;
+/

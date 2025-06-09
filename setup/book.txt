@@ -1,0 +1,15 @@
+DROP TABLE Book;
+CREATE TABLE Book(
+    BookID          CHAR(7)         NOT NULL,
+    BookTitle       VARCHAR2(100)   NOT NULL,
+    BookAuthor      VARCHAR2(50)    NOT NULL,
+    BookPublisher   VARCHAR2(50)    NOT NULL,
+    BookPrice       NUMBER(5,2)     DEFAULT 0 NOT NULL,
+    Genre           VARCHAR2(11)    NOT NULL,
+    PublicationYear NUMBER(4,0)     NOT NULL,
+    CONSTRAINT pk_book_bookID PRIMARY KEY (BookID),
+    CONSTRAINT check_book_bookID CHECK (REGEXP_LIKE(BookID, '^BK([0-9]{5})+$')),
+    CONSTRAINT check_book_genre CHECK (Genre IN ('FANTASY', 'THRILLER', 'ROMANCE', 'MYSTERY', 'HORROR', 'SCI-FICTION')),
+    CONSTRAINT check_book_price CHECK (BookPrice >= 0),
+    CONSTRAINT chk_book_year CHECK (PublicationYear BETWEEN 1000 AND 2025)
+);

@@ -1,0 +1,29 @@
+SET LINESIZE 55 
+SET PAGESIZE 35 
+cl scr
+
+
+CREATE OR REPLACE VIEW query2_kjq AS
+SELECT B.FacilityPostUsageCondition, F.FineID, F.FineCharged
+FROM Fine F JOIN FacilityBooking B ON F.FineID=B.FineID
+WHERE F.FineType = 'ROOMFINE'
+AND EXTRACT(year FROM F.FineIssuedDate) = 2024
+ORDER BY B.FacilityPostUsageCondition, F.FineID;
+
+TTITLE CENTER 'Fine Charged On Facility Booking in Year 2024' SKIP 2 
+BTITLE LEFT 'Page:' FORMAT 999 SQL.PNO SKIP 2 
+COLUMN FacilityPostUsageCondition FORMAT A25 HEADING 'Condition'
+COLUMN FineID FORMAT A10 HEADING 'Fine ID'
+COLUMN FineCharged FORMAT 99999999999999.99 HEADING 'Fine Charged (RM)'
+
+BREAK ON Report SKIP 1 ON FacilityPostUsageCondition SKIP 1 ON FineID
+COMPUTE SUM LABEL 'Total (RM)' OF FineCharged ON FacilityPostUsageCondition
+COMPUTE SUM LABEL 'Grand Total (RM)' OF FineCharged ON REPORT
+
+SELECT * FROM query2_kjq;
+
+CLEAR BREAKS 
+CLEAR COMPUTES
+CLEAR COLUMNS
+TTITLE OFF
+BTITLE OFF

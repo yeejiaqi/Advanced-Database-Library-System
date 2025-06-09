@@ -1,0 +1,89 @@
+CREATE OR REPLACE TRIGGER trg_reservation_ready
+FOR UPDATE OF ReturnDate ON BorrowDetails
+COMPOUND TRIGGER
+
+    -- Declare a collection to store BookCopyIDs
+    TYPE BookCopyIDList IS TABLE OF BorrowDetails.BookCopyID%TYPE INDEX BY PLS_INTEGER;
+    g_BookCopyIDs BookCopyIDList;
+    g_Index PLS_INTEGER := 0;
+
+AFTER EACH ROW IS
+BEGIN
+    -- Collect BookCopyIDs where the book is returned in good condition
+    IF :NEW.BorrowStatus = 'RETURNED' AND
+       :NEW.ReturnCondition = 'GOOD' AND
+       :NEW.ReturnDate IS NOT NULL THEN
+        g_Index := g_Index + 1;
+        g_BookCopyIDs(g_Index) := :NEW.BookCopyID;
+    END IF;
+END AFTER EACH ROW;
+
+AFTER STATEMENT IS
+    v_ReserveID Reserve.ReserveID%TYPE;
+    v_all_ready NUMBER;
+    v_total_books NUMBER;
+    v_latest_borrow_id BorrowDetails.BorrowID%TYPE;
+BEGIN
+    FOR i IN 1 .. g_BookCopyIDs.COUNT LOOP
+        BEGIN
+            -- Get latest borrow record ID for this BookCopy
+            SELECT BorrowID INTO v_latest_borrow_id
+            FROM (
+                SELECT BorrowID
+                FROM BorrowDetails
+                WHERE BookCopyID = g_BookCopyIDs(i)
+                ORDER BY OriBookLoanDueDate DESC
+            )
+            WHERE ROWNUM = 1;
+
+            -- Get the latest reservation (based on ReserveDateTime)
+            SELECT ReserveID INTO v_ReserveID
+            FROM (
+                SELECT RD.ReserveID
+                FROM ReserveDetails RD
+                JOIN Reserve R ON RD.ReserveID = R.ReserveID
+                WHERE RD.BookCopyID = g_BookCopyIDs(i)
+                  AND RD.ReadyToPickUp = 'F'
+                  AND R.ReserveStatus = 'RESERVED'
+                ORDER BY R.ReserveDateTime DESC
+            )
+            WHERE ROWNUM = 1;
+
+            -- Mark the book as ready
+            UPDATE ReserveDetails
+            SET ReadyToPickUp = 'T'
+            WHERE BookCopyID = g_BookCopyIDs(i)
+              AND ReserveID = v_ReserveID;
+
+            -- Count ready books for this reservation
+            SELECT COUNT(*) INTO v_all_ready
+            FROM ReserveDetails
+            WHERE ReserveID = v_ReserveID
+              AND ReadyToPickUp = 'T';
+
+            SELECT COUNT(*) INTO v_total_books
+            FROM ReserveDetails
+            WHERE ReserveID = v_ReserveID;
+
+            -- Update main Reserve record if all books are ready
+            IF v_all_ready = v_total_books THEN
+                UPDATE Reserve
+                SET ReserveStatus = 'READYTOCOLLECT',
+                    EstPickupAvailableStartDate = SYSDATE,
+                    EstPickupAvailableDueDate = SYSDATE + 3
+                WHERE ReserveID = v_ReserveID;
+            END IF;
+
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                NULL; -- Handle as needed
+            WHEN TOO_MANY_ROWS THEN
+                NULL; -- Handle as needed
+            WHEN OTHERS THEN
+                NULL; -- Handle as needed
+        END;
+    END LOOP;
+END AFTER STATEMENT;
+
+END trg_reservation_ready;
+/

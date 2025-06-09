@@ -1,0 +1,55 @@
+CREATE OR REPLACE PROCEDURE sp_CancelReservation (
+    p_ReserveID IN CHAR
+)
+IS
+    v_Status Reserve.ReserveStatus%TYPE;
+    v_ActualPickupDate Reserve.ActualPickupDate%TYPE;
+    v_ErrorMessage VARCHAR2(400);
+BEGIN
+    -- 1. Fetch current reservation status and check pickup status
+    SELECT ReserveStatus, ActualPickupDate
+    INTO v_Status, v_ActualPickupDate
+    FROM Reserve
+    WHERE ReserveID = p_ReserveID;
+
+    -- 2. Allow cancel only if status is RESERVED, READYTOCOLLECT, or DELAYED
+    IF v_Status NOT IN ('RESERVED', 'READYTOCOLLECT', 'DELAYED') THEN
+        RAISE_APPLICATION_ERROR(-20010, 'Only RESERVED, READYTOCOLLECT, or DELAYED reservations can be cancelled.');
+    END IF;
+
+    -- 3. Prevent cancelling if already picked up
+    IF v_ActualPickupDate IS NOT NULL THEN
+        RAISE_APPLICATION_ERROR(-20011, 'Cannot cancel a reservation that has already been collected.');
+    END IF;
+
+    -- 4. Cancel the reservation and clear pickup dates
+    UPDATE Reserve
+    SET ReserveStatus = 'CANCELLED',
+        EstPickupAvailableStartDate = NULL,
+        EstPickupAvailableDueDate = NULL
+    WHERE ReserveID = p_ReserveID;
+
+    -- 5. Update BookCopy status to AVAILABLE and ReserveDetails to not ready
+    FOR rec IN (
+        SELECT BookCopyID FROM ReserveDetails WHERE ReserveID = p_ReserveID
+    ) LOOP
+        UPDATE BookCopy
+        SET BookStatus = 'AVAILABLE'
+        WHERE BookCopyID = rec.BookCopyID;
+
+        UPDATE ReserveDetails
+        SET ReadyToPickUp = 'F'
+        WHERE BookCopyID = rec.BookCopyID AND ReserveID = p_ReserveID;
+    END LOOP;
+
+    DBMS_OUTPUT.PUT_LINE('Reservation ' || p_ReserveID || ' has been successfully cancelled.');
+
+EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+        RAISE_APPLICATION_ERROR(-20012, 'Reservation ID not found.');
+    WHEN OTHERS THEN
+        v_ErrorMessage := SQLERRM;
+        DBMS_OUTPUT.PUT_LINE('Error occurred: ' || v_ErrorMessage);
+        RAISE;
+END;
+/

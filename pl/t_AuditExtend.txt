@@ -1,0 +1,13 @@
+CREATE OR REPLACE TRIGGER audit_ExtendLoan
+AFTER UPDATE OF LatestBookLoanDueDate ON BorrowDetails
+FOR EACH ROW
+DECLARE
+    v_UserID Borrow.UserID%TYPE;
+BEGIN
+    SELECT UserID INTO v_UserID
+    FROM Borrow
+    WHERE BorrowID = :OLD.BorrowID;
+    
+    INSERT INTO ExtendLoanAudit VALUES (v_userID, :OLD.BookCopyID, SYSDATE, :OLD.LatestBookLoanDueDate, :new.LatestBookLoanDueDate);
+END;
+/

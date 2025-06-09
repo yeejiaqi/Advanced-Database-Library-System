@@ -1,0 +1,26 @@
+DROP TABLE MembershipActivity;
+CREATE TABLE MembershipActivity(
+        MembershipActivityID            CHAR(7)             NOT NULL,
+        UserID                          CHAR(7)             NOT NULL,
+        PaymentID                       CHAR(7)             UNIQUE      NOT NULL,
+        ActivityName                    VARCHAR(50)         NOT NULL,
+        ActivityDate                    DATE                NOT NULL,
+        InitialMembershipType           VARCHAR(8)                NOT NULL,
+        CurrentMembershipType           VARCHAR(8)                NOT NULL,
+        OldExpiryDate                   DATE,
+        NewExpiryDate                   DATE                        NOT NULL,
+        OldMaxBookAllowed               NUMBER(2,0)         NOT NULL,
+        NewMaxBookAllowed               NUMBER(2,0)         NOT NULL,
+        FeeCharged                      NUMBER(4,2)         NOT NULL,
+        CONSTRAINT pk_ma PRIMARY KEY(MembershipActivityID),
+        CONSTRAINT check_ma_userID FOREIGN KEY (UserID) REFERENCES LibraryUser(UserID),
+        CONSTRAINT check_ma_paymentID FOREIGN KEY (PaymentID) REFERENCES Payment(PaymentID),
+        CONSTRAINT check_ma_maID CHECK (REGEXP_LIKE(MembershipActivityID, '^MA([0-9]{5})+$')),
+        CONSTRAINT check_ma_activityName CHECK ((ActivityName = 'RENEW' AND InitialMembershipType = CurrentMembershipType AND OldMaxBookAllowed = NewMaxBookAllowed) OR (ActivityName = 'UPGRADE' AND InitialMembershipType != CurrentMembershipType AND OldMaxBookAllowed < NewMaxBookAllowed) OR (ActivityName = 'REGISTER' AND InitialMembershipType = 'NONE' AND CurrentMembershipType IN ('BASIC', 'STANDARD', 'PREMIUM') AND OldMaxBookAllowed = 2 AND OldMaxBookAllowed != NewMaxBookAllowed AND OldExpiryDate IS NULL) OR (ActivityName = 'REACTIVATE' AND InitialMembershipType = CurrentMembershipType AND OldMaxBookAllowed = NewMaxBookAllowed)),
+        CONSTRAINT check_ma_initialMemType CHECK (InitialMembershipType IN ('NONE','BASIC','STANDARD','PREMIUM')),
+        CONSTRAINT check_ma_currentMempType CHECK ((InitialMembershipType = 'NONE' AND CurrentMembershipType IN ('BASIC', 'STANDARD', 'PREMIUM')) OR (InitialMembershipType = 'BASIC' AND CurrentMembershipType IN ('BASIC', 'STANDARD', 'PREMIUM')) OR (InitialMembershipType = 'STANDARD' AND CurrentMembershipType IN ('STANDARD', 'PREMIUM')) OR (InitialMembershipType = 'PREMIUM' AND CurrentMembershipType = 'PREMIUM')),
+        CONSTRAINT check_ma_expiryDate CHECK (OldExpiryDate IS NULL OR OldExpiryDate < NewExpiryDate),
+        CONSTRAINT check_ma_oldMaxBook CHECK ((OldMaxBookAllowed = 3 AND (InitialMembershipType = 'BASIC')) OR(OldMaxBookAllowed = 6 AND (InitialMembershipType = 'STANDARD')) OR (OldMaxBookAllowed = 10 AND (InitialMembershipType = 'PREMIUM')) OR (OldMaxBookAllowed = 2 AND (InitialMembershipType = 'NONE'))),
+        CONSTRAINT check_ma_newMaxBook CHECK ((NewMaxBookAllowed = 3 AND (CurrentMembershipType = 'BASIC')) OR (NewMaxBookAllowed = 6 AND (CurrentMembershipType = 'STANDARD')) OR (NewMaxBookAllowed = 10 AND (CurrentMembershipType = 'PREMIUM')) ),
+        CONSTRAINT check_ma_feeCharged CHECK (FeeCharged > 0)
+);

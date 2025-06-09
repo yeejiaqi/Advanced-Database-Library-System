@@ -1,0 +1,42 @@
+CREATE OR REPLACE PROCEDURE p_Return (
+    p_UserID IN VARCHAR2,
+    p_BookCopyID IN VARCHAR2,
+    p_ReturnCondition IN VARCHAR2
+) AS
+    v_BorrowID CHAR(7);
+    v_OriDueDate DATE;
+    v_UpperCondition VARCHAR2(8) := UPPER(p_ReturnCondition);
+BEGIN
+    -- Validate return condition
+    IF v_UpperCondition NOT IN ('GOOD', 'LIGHTDMG', 'HEAVYDMG', 'LOST') THEN
+        RAISE_APPLICATION_ERROR(-20001, 'The available return conditions can only be GOOD, LIGHTDMG, HEAVYDMG and LOST.');
+    END IF;
+
+    -- Find the borrow record
+    BEGIN
+        SELECT bd.BorrowID, bd.LatestBookLoanDueDate
+        INTO v_BorrowID, v_OriDueDate
+        FROM Borrow b
+        JOIN BorrowDetails bd ON b.BorrowID = bd.BorrowID
+        WHERE b.UserID = UPPER(p_UserID)
+          AND bd.BookCopyID = UPPER(p_BookCopyID)
+          AND bd.BorrowStatus IN ('BORROWED', 'OVERDUE');
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20002, 'No active borrow record found for this user and book copy.');
+    END;
+
+    -- Update borrow details with return date and status
+    UPDATE BorrowDetails
+    SET ReturnDate = SYSDATE,
+        ReturnCondition = v_UpperCondition,
+        BorrowStatus = CASE 
+                         WHEN SYSDATE <= v_OriDueDate THEN 'RETURNED'
+                         ELSE 'LATERETURN'
+                       END
+    WHERE BorrowID = v_BorrowID
+    AND BookCopyID = UPPER(p_BookCopyID);
+
+    DBMS_OUTPUT.PUT_LINE( p_BookCopyID || ' returned successfully.');
+END;
+/

@@ -1,0 +1,141 @@
+SET SERVEROUTPUT ON;
+SET LINESIZE 200;
+cl scr
+
+DROP INDEX idx_borrowdetails_status;
+
+CREATE INDEX idx_borrowdetails_status ON BorrowDetails(BorrowStatus);
+
+CREATE OR REPLACE PROCEDURE prc_OverdueReport IS
+
+    -- Counters
+    v_UserTotal        NUMBER := 0;
+    v_BookTotal        NUMBER := 0;
+    v_NoneTotal        NUMBER := 0;
+    v_BasicTotal       NUMBER := 0;
+    v_StandardTotal    NUMBER := 0;
+    v_PremiumTotal     NUMBER := 0;
+
+    v_seq NUMBER := 1;  -- Sequence counter for the user section
+    v_book_seq NUMBER := 1;  -- Sequence counter for the book section
+
+    -- Outer cursor: Users grouped by UserID and sorted by latest due date
+    CURSOR user_cursor IS
+        SELECT 
+            u.UserID, 
+            u.UserName, 
+            u.MembershipType,
+            COUNT(DISTINCT bd.BookCopyID) AS TotalOverdueBooks,  -- Count distinct BookCopyID for each user
+            MAX(bd.LatestBookLoanDueDate) AS LatestDueDate
+        FROM BorrowDetails bd
+        JOIN Borrow br ON bd.BorrowID = br.BorrowID
+        JOIN LibraryUser u ON br.UserID = u.UserID
+        WHERE bd.BorrowStatus = 'OVERDUE'
+        GROUP BY u.UserID, u.UserName, u.MembershipType
+        HAVING COUNT(DISTINCT bd.BookCopyID) >= 1  -- Ensure we count only those with at least one overdue book copy
+        ORDER BY TRUNC(SYSDATE - MAX(bd.LatestBookLoanDueDate)) DESC;
+
+    u_rec user_cursor%ROWTYPE;
+
+    -- Inner cursor: book-level overdue details
+    CURSOR book_cursor IS
+        SELECT 
+            br.UserID,
+            bc.BookCopyID,
+            b.BookTitle,
+            bd.OriBookLoanDueDate,
+            bd.LatestBookLoanDueDate,
+            TRUNC(SYSDATE - bd.LatestBookLoanDueDate) AS DaysOverdue
+        FROM BorrowDetails bd
+        JOIN Borrow br ON bd.BorrowID = br.BorrowID
+        JOIN BookCopy bc ON bd.BookCopyID = bc.BookCopyID
+        JOIN Book b ON bc.BookID = b.BookID
+        WHERE bd.BorrowStatus = 'OVERDUE'
+        ORDER BY TRUNC(SYSDATE - bd.LatestBookLoanDueDate) DESC;
+
+    b_rec book_cursor%ROWTYPE;
+
+BEGIN
+    -- USER SUMMARY SECTION
+    DBMS_OUTPUT.PUT_LINE(CHR(10) || '===================================================== OVERDUE USER SUMMARY REPORT ==========================================================' );
+    DBMS_OUTPUT.PUT_LINE(RPAD('No.', 4) || ' | ' || RPAD('User ID', 12) || ' | ' || RPAD('Name', 30) || ' | ' || RPAD('Membership', 12) || ' | ' || LPAD('Overdue Books', 14) || ' | ' || LPAD('Days Overdue', 13));
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 140, '-'));
+
+    OPEN user_cursor;
+    LOOP
+        FETCH user_cursor INTO u_rec;
+        EXIT WHEN user_cursor%NOTFOUND;
+
+        DBMS_OUTPUT.PUT_LINE(
+            RPAD(v_seq, 4) || ' | ' ||  -- Sequence number for user
+            RPAD(u_rec.UserID, 12) || ' | ' ||
+            RPAD(u_rec.UserName, 30) || ' | ' ||
+            RPAD(NVL(u_rec.MembershipType, 'NONE'), 12) || ' | ' ||
+            LPAD(u_rec.TotalOverdueBooks, 14) || ' | ' ||
+            LPAD(TRUNC(SYSDATE - u_rec.LatestDueDate), 13)
+        );
+
+        -- Update totals
+        v_UserTotal := v_UserTotal + 1;
+        v_BookTotal := v_BookTotal + u_rec.TotalOverdueBooks;
+
+        -- Membership breakdown
+        CASE UPPER(NVL(u_rec.MembershipType, 'NONE'))
+            WHEN 'NONE' THEN v_NoneTotal := v_NoneTotal + 1;
+            WHEN 'BASIC' THEN v_BasicTotal := v_BasicTotal + 1;
+            WHEN 'STANDARD' THEN v_StandardTotal := v_StandardTotal + 1;
+            WHEN 'PREMIUM' THEN v_PremiumTotal := v_PremiumTotal + 1;
+        END CASE;
+
+        -- Increment sequence number for next user record
+        v_seq := v_seq + 1;
+    END LOOP;
+    CLOSE user_cursor;
+
+    DBMS_OUTPUT.PUT_LINE(CHR(2));
+
+    -- BOOK DETAIL SECTION
+    DBMS_OUTPUT.PUT_LINE('========================================================== OVERDUE BOOK DETAIL =============================================================' );
+    DBMS_OUTPUT.PUT_LINE(RPAD('No.', 4) || ' | ' || RPAD('User ID', 12) || ' | ' || RPAD('Book Copy ID', 15) || ' | ' || RPAD('Book Title', 50) || ' | ' || RPAD('Original Due', 15) || ' | ' || LPAD('Days Overdue', 13));
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 140, '-'));
+
+    OPEN book_cursor;
+    LOOP
+        FETCH book_cursor INTO b_rec;
+        EXIT WHEN book_cursor%NOTFOUND;
+
+        DBMS_OUTPUT.PUT_LINE(
+            RPAD(v_book_seq, 4) || ' | ' ||  -- Separate sequence number for book details
+            RPAD(b_rec.UserID, 12) || ' | ' ||
+            RPAD(b_rec.BookCopyID, 15) || ' | ' ||
+            RPAD(SUBSTR(b_rec.BookTitle, 1, 50), 50) || ' | ' ||
+            RPAD(TO_CHAR(b_rec.OriBookLoanDueDate, 'YYYY-MM-DD'), 15) || ' | ' ||
+            LPAD(b_rec.DaysOverdue, 13)
+        );
+
+        -- Increment sequence number for next book record
+        v_book_seq := v_book_seq + 1;
+    END LOOP;
+    CLOSE book_cursor;
+
+    -- SUMMARY SECTION
+
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 140, '=')); 
+    DBMS_OUTPUT.PUT_LINE('SUMMARY');
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 140, '-'));
+    DBMS_OUTPUT.PUT_LINE('Total Users with Overdue Books   : ' || v_UserTotal);
+    DBMS_OUTPUT.PUT_LINE('Total Overdue Books              : ' || v_BookTotal);
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 140, '='));
+    DBMS_OUTPUT.PUT_LINE('Total Overdue Users in Each Membership Type');
+    DBMS_OUTPUT.PUT_LINE(RPAD('-', 140, '-'));
+    DBMS_OUTPUT.PUT_LINE('  NONE      : ' || v_NoneTotal);
+    DBMS_OUTPUT.PUT_LINE('  BASIC     : ' || v_BasicTotal);
+    DBMS_OUTPUT.PUT_LINE('  STANDARD  : ' || v_StandardTotal);
+    DBMS_OUTPUT.PUT_LINE('  PREMIUM   : ' || v_PremiumTotal);
+    DBMS_OUTPUT.PUT_LINE(RPAD('=', 140, '='));
+
+EXCEPTION
+    WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error occurred: ' || SQLERRM);
+END;
+/

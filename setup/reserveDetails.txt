@@ -1,0 +1,10 @@
+DROP TABLE ReserveDetails;
+CREATE TABLE ReserveDetails(
+    ReserveID           CHAR(7)     NOT NULL,
+    BookCopyID          CHAR(7)     NOT NULL,
+    ReadyToPickUp       VARCHAR2(1) DEFAULT 'F' NOT NULL,
+    CONSTRAINT pk_rd_reserveIDbookID PRIMARY KEY (ReserveID, BookCopyID),
+    CONSTRAINT fk_rd_reserveID FOREIGN KEY (ReserveID) REFERENCES Reserve(ReserveID),
+    CONSTRAINT fk_rd_bookCopyID FOREIGN KEY (BookCopyID) REFERENCES BookCopy(BookCopyID),
+    CONSTRAINT chk_rd_readyToPickUp CHECK (ReadyToPickUp IN ('T', 'F'))
+);

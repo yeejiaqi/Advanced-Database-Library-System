@@ -1,0 +1,201 @@
+DECLARE
+  v_next_id NUMBER;
+BEGIN
+  -- Determine the next starting value for the sequence
+  SELECT NVL(MAX(TO_NUMBER(SUBSTR(BorrowID, 3, 5))), 0) + 1 INTO v_next_id FROM Borrow;
+
+  -- Drop the existing sequence if it exists
+  BEGIN
+    EXECUTE IMMEDIATE 'DROP SEQUENCE seq_borrow_id';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLCODE != -2289 THEN -- ORA-02289: sequence does not exist
+        RAISE;
+      END IF;
+  END;
+
+  -- Create a new sequence starting from the next available ID
+  EXECUTE IMMEDIATE 'CREATE SEQUENCE seq_borrow_id START WITH ' || v_next_id || ' INCREMENT BY 1 NOCACHE NOCYCLE';
+END;
+/
+
+
+SET SERVEROUTPUT ON;
+
+CREATE OR REPLACE PROCEDURE p_BorrowBooks (
+    v_UserID IN VARCHAR2,
+    v_BookCopyIDs IN SYS.ODCIVARCHAR2LIST
+) AS
+    v_UserAccStatus VARCHAR2(11);
+    v_BorrowID CHAR(7);
+    v_BookCondition VARCHAR2(8);
+    v_BookStatus VARCHAR2(16);
+    v_MaxAllowed NUMBER;
+    v_CurrentBorrowed NUMBER:=0;
+    v_RemainingSlots NUMBER;
+    v_FUnpaidRecord NUMBER:=0;
+    v_BUnpaidRecord NUMBER:=0;
+    v_UpdateOverdue NUMBER:=0;
+    v_UpdateBlacklist NUMBER:=0;
+
+    -- Cursor variables
+    CURSOR c_BorrowDetails(p_BookCopyID VARCHAR2) IS
+        SELECT bc.BookCopyID, bc.BookStatus, bd.LatestBookLoanDueDate
+        FROM BorrowDetails bd
+        JOIN BookCopy bc ON bd.BookCopyID = bc.BookCopyID
+        WHERE bc.BookCopyID = p_BookCopyID
+        AND TRUNC(bd.OriBookLoanDueDate) = TRUNC(SYSDATE + 7);
+
+BEGIN
+
+    -- Get user account status and max book allow to borrow
+    SELECT UserAccountStatus, MaxBookAllowed
+    INTO v_UserAccStatus, v_MaxAllowed
+    FROM LibraryUser
+    WHERE UserID = v_UserID;
+
+    IF v_UserAccStatus = 'BLACKLISTED' THEN
+        RAISE_APPLICATION_ERROR(-20001, 'The user has been blacklisted.'); -- Checked
+    ELSIF v_UserAccStatus = 'TERMINATED' THEN
+        RAISE_APPLICATION_ERROR(-20003, 'The user account has been terminated.');
+    END IF;
+
+
+    -- Get user fine record unpaid
+    -- facility booking
+    SELECT COUNT(*)
+    INTO v_FUnpaidRecord
+    FROM Fine f
+    JOIN FacilityBooking fb ON f.FineID = fb.FineID
+    WHERE (fb.UserID = v_userID)
+    AND f.FineStatus IN ('PENDING');
+
+    IF v_FUnpaidRecord > 0 THEN
+
+        -- Get record that alr overdue > 14 days and need blacklist
+        SELECT COUNT(*)
+        INTO v_UpdateBlacklist
+        FROM Fine f
+        JOIN FacilityBooking fb ON f.FineID = fb.FineID
+        WHERE (fb.UserID = v_userID)
+        AND f.FineStatus IN ('PENDING')
+        AND TRUNC(SYSDATE - f.FineDueDate) > 14 ;
+
+        -- Update user into black list
+        IF v_UpdateBlacklist > 0 THEN
+            UPDATE LibraryUser
+            SET UserAccountStatus = 'BLACKLISTED'
+            WHERE UserID = v_userID;
+
+            RAISE_APPLICATION_ERROR(-20001, 'The user has been blacklisted.');
+        END IF;
+
+        RAISE_APPLICATION_ERROR(-20002, 'The user has unpaid fine.');
+    END IF;
+
+    v_UpdateOverdue :=0;
+    v_UpdateBlacklist :=0;
+
+    -- borrow
+    SELECT COUNT(*)
+    INTO v_BUnpaidRecord
+    FROM Fine f
+    JOIN BorrowDetails bd ON f.FineID = bd.FineID
+    JOIN Borrow b ON bd.BorrowID = b.BorrowID
+    WHERE (b.UserID = v_userID)
+    AND f.FineStatus IN ('PENDING');
+
+    IF v_BUnpaidRecord > 0 THEN
+
+        -- Get record that alr overdue > 14 days and need blacklist
+        SELECT COUNT(*)
+        INTO v_UpdateBlacklist
+        FROM Fine f
+        JOIN BorrowDetails bd ON f.FineID = bd.FineID
+        JOIN Borrow b ON bd.BorrowID = b.BorrowID
+        WHERE (b.UserID = v_userID)
+        AND f.FineStatus IN ('PENDING')
+        AND TRUNC(SYSDATE - f.FineDueDate) > 14 ;
+
+        -- Update user into black list
+        IF v_UpdateBlacklist > 0 THEN
+            UPDATE LibraryUser
+            SET UserAccountStatus = 'BLACKLISTED'
+            WHERE UserID = v_userID;
+
+            RAISE_APPLICATION_ERROR(-20001, 'The user has been blacklisted.');
+        END IF;
+
+        RAISE_APPLICATION_ERROR(-20002, 'The user has unpaid fine.');
+    END IF;
+
+
+    -- Count current borrowed books
+    SELECT COUNT(*)
+    INTO v_CurrentBorrowed
+    FROM Borrow b
+    JOIN BorrowDetails bd ON b.BorrowID = bd.BorrowID
+    WHERE b.UserID = v_UserID AND bd.BorrowStatus IN ('BORROWED', 'OVERDUE');
+
+    v_RemainingSlots := v_MaxAllowed - v_CurrentBorrowed;
+
+    IF v_RemainingSlots <= 0 THEN
+        RAISE_APPLICATION_ERROR(-20004, 'User reached borrow limit (' || v_MaxAllowed || ' books).'); -- Checked
+    ELSIF v_BookCopyIDs.COUNT > v_RemainingSlots THEN
+        RAISE_APPLICATION_ERROR(-20005, 'User can only borrow ' || v_RemainingSlots || ' more book(s).'); -- Checked
+    END IF;
+
+    -- Check each Book Condition and Status first
+    FOR i IN 1 .. v_BookCopyIDs.COUNT
+    LOOP
+        -- Check Book Condition and Status
+        SELECT BookCondition, BookStatus
+        INTO v_BookCondition, v_BookStatus
+        FROM BookCopy
+        WHERE BookCopyID = v_BookCopyIDs(i);
+
+        IF v_BookCondition != 'GOOD' THEN
+            RAISE_APPLICATION_ERROR(-20006, 'Book ' || v_BookCopyIDs(i) || ' is not in good condition.'); -- Checked
+        ELSIF v_BookStatus != 'AVAILABLE' THEN
+            RAISE_APPLICATION_ERROR(-20007, 'Book ' || v_BookCopyIDs(i) || ' is not available.'); -- Checked
+        END IF;
+    
+    END LOOP;
+
+    DBMS_OUTPUT.PUT_LINE('BookCopyID  | Status      | Return Date');
+    DBMS_OUTPUT.PUT_LINE('------------+-------------+------------');
+
+    -- Loop through book list to insert, update and display
+    FOR i IN 1 .. v_BookCopyIDs.COUNT 
+    LOOP
+
+        -- Generate BorrowID for the first book only
+        IF i = 1 THEN
+            SELECT 'BR' || LPAD(seq_borrow_id.NEXTVAL, 5, '0') INTO v_BorrowID FROM dual;
+            INSERT INTO Borrow VALUES (v_BorrowID, SYSDATE, v_UserID);
+        END IF;
+
+        -- Insert into BorrowDetails
+        INSERT INTO BorrowDetails VALUES (
+            v_BorrowID, v_BookCopyIDs(i), SYSDATE + 7, SYSDATE + 7, NULL, NULL, 'BORROWED', NULL
+        );
+
+        -- Update Book Status
+        UPDATE BookCopy
+        SET BookStatus = 'BORROWED'
+        WHERE BookCopyID = v_BookCopyIDs(i);
+
+        -- Use Cursor to Show All BorrowDetails for this BookCopyID
+        FOR rec IN c_BorrowDetails(v_BookCopyIDs(i)) 
+        LOOP
+
+            DBMS_OUTPUT.PUT_LINE(
+                RPAD(rec.BookCopyID, 11) || ' | ' ||
+                RPAD(rec.BookStatus, 11) || ' | ' ||
+                RPAD(TO_CHAR(rec.LatestBookLoanDueDate, 'YYYY-MM-DD'), 12)
+            );
+
+        END LOOP;
+    END LOOP;
+END;
+/

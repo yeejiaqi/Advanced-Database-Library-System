@@ -1,0 +1,137 @@
+--MONTHLY POST USAGE REPORT--
+
+--index--
+-- If your code does TRUNC(BookingDate), use a function-based index:
+CREATE INDEX idx_fb_truncdate_status
+  ON FacilityBooking (
+    TRUNC(BookingDate),
+    BookingStatus
+  );
+
+-- index to drive the per-facility counts (facility + status + month+year + non-null condition)
+CREATE INDEX idx_fb_facstat_truncdate
+  ON FacilityBooking(
+       FacilityID,
+       BookingStatus,
+       TRUNC(BookingDate),
+       FacilityPostUsageCondition
+     );
+
+-- Function to validate input month and year
+CREATE OR REPLACE FUNCTION fn_validate_month_year (
+    p_month IN PLS_INTEGER,
+    p_year  IN PLS_INTEGER
+) RETURN BOOLEAN IS
+BEGIN
+    RETURN p_month BETWEEN 1 AND 12
+       AND p_year BETWEEN 2019 AND EXTRACT(YEAR FROM SYSDATE);
+END fn_validate_month_year;
+/
+
+
+CREATE OR REPLACE PROCEDURE rp_MthlyPostUsageCondReport (
+    p_month IN PLS_INTEGER,
+    p_year  IN PLS_INTEGER
+) IS
+    -- Custom exception for invalid input
+    e_invalid_period EXCEPTION;
+    PRAGMA EXCEPTION_INIT(e_invalid_period, -20050);
+
+    -- Cursor: only facilities that had completed bookings with a non‑null condition
+    CURSOR c_fac IS
+        SELECT f.FacilityID,f.FacilityName
+          FROM Facility f
+         WHERE f.FacilityID IN (
+               SELECT b.FacilityID
+                 FROM FacilityBooking b
+                WHERE b.BookingStatus = 'COMPLETED'
+                  AND b.FacilityPostUsageCondition IS NOT NULL
+                  AND EXTRACT(MONTH FROM b.BookingDate) = p_month
+                  AND EXTRACT(YEAR FROM b.BookingDate) = p_year
+             )
+         ORDER BY f.FacilityName;
+
+    -- Cursor: counts per condition for a given facility
+    CURSOR c_cond(p_fid CHAR) IS
+        SELECT FacilityPostUsageCondition AS Condition, COUNT(*) AS CondCount
+          FROM FacilityBooking
+         WHERE FacilityID = p_fid
+           AND BookingStatus = 'COMPLETED'
+           AND FacilityPostUsageCondition IS NOT NULL
+           AND EXTRACT(MONTH FROM BookingDate) = p_month
+           AND EXTRACT(YEAR FROM BookingDate) = p_year
+         GROUP BY FacilityPostUsageCondition;
+
+    -- Loop variables
+    v_fac_rec  c_fac%ROWTYPE;
+    v_cond_rec c_cond%ROWTYPE;
+
+    -- Counters per facility
+    v_good      NUMBER;
+    v_dirty     NUMBER;
+    v_defective NUMBER;
+    v_total     NUMBER;
+
+    -- Grand totals
+    v_total_good      NUMBER := 0;
+    v_total_dirty     NUMBER := 0;
+    v_total_defective NUMBER := 0;
+BEGIN
+    -- Validate inputs
+    IF NOT fn_validate_month_year(p_month, p_year) THEN
+        RAISE e_invalid_period;
+    END IF;
+
+    -- Header
+    DBMS_OUTPUT.PUT_LINE(CHR(10));
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',75,'='));
+    DBMS_OUTPUT.PUT_LINE('----- Monthly Facility Post-Usage Condition Report: '||TO_CHAR(TO_DATE(p_year || '-' || p_month || '-01', 'YYYY-MM-DD'),'FMMonth YYYY') || ' -----'); 
+    DBMS_OUTPUT.PUT_LINE(CHR(10));
+    DBMS_OUTPUT.PUT_LINE(RPAD('Facility Name',25) || RPAD('Total Booking',16) || RPAD('GOOD',10) || RPAD('DEFECTIVE',15) || RPAD('DIRTY',10));
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',75,'='));
+
+    -- Loop facilities
+    OPEN c_fac;
+    LOOP
+        FETCH c_fac INTO v_fac_rec;
+        EXIT WHEN c_fac%NOTFOUND;
+
+        -- reset
+        v_good := 0; v_dirty := 0; v_defective := 0;
+
+        -- count each condition
+        OPEN c_cond(v_fac_rec.FacilityID);
+        LOOP
+            FETCH c_cond INTO v_cond_rec;
+            EXIT WHEN c_cond%NOTFOUND;
+            IF v_cond_rec.Condition = 'GOOD' THEN v_good := v_cond_rec.CondCount;
+            ELSIF v_cond_rec.Condition = 'DEFECTIVE' THEN v_defective := v_cond_rec.CondCount;
+            ELSIF v_cond_rec.Condition = 'DIRTY' THEN v_dirty := v_cond_rec.CondCount;
+            END IF;
+        END LOOP;
+        CLOSE c_cond;
+
+        v_total := v_good + v_defective + v_dirty;
+
+        -- print 
+        DBMS_OUTPUT.PUT_LINE(RPAD(v_fac_rec.FacilityName,26) ||RPAD(v_total,16) ||RPAD(v_good,10) ||RPAD(v_defective,15) ||RPAD(v_dirty,10));
+
+        -- accumulate grand totals
+        v_total_good      := v_total_good + v_good;
+        v_total_defective := v_total_defective + v_defective;
+        v_total_dirty     := v_total_dirty + v_dirty;
+    END LOOP;
+    CLOSE c_fac;
+
+    -- Grand totals footer
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',75,'='));
+    DBMS_OUTPUT.PUT_LINE(RPAD('TOTAL',12)||LPAD(v_total_good+v_total_defective+v_total_dirty,15) ||LPAD(v_total_good,16)||LPAD(v_total_defective,10)||LPAD(v_total_dirty,15));
+    DBMS_OUTPUT.PUT_LINE(RPAD('=',75,'='));
+
+EXCEPTION
+    WHEN e_invalid_period THEN
+        RAISE_APPLICATION_ERROR(-20050,'Invalid month/year: month must be 1-12 and year from 2019 to current year.');
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20099, 'Unexpected error in report: '||SQLCODE||' - '||SQLERRM);
+END rp_MthlyPostUsageCondReport;
+/

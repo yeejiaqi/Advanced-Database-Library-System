@@ -1,0 +1,262 @@
+-- INSERT PROCEDURE: INSERT "BOOKED" RECORD FOR FACILITY BOOKING TABLE--
+
+CREATE OR REPLACE PROCEDURE InsertBooking (
+    p_UserID               IN FacilityBooking.UserID%TYPE,
+    p_FacilityID           IN FacilityBooking.FacilityID%TYPE,
+    p_TimeSlotID           IN FacilityBooking.TimeSlotID%TYPE,
+    p_BookingDate          IN FacilityBooking.BookingDate%TYPE,
+    p_NumberOfParticipants IN FacilityBooking.NumberOfParticipants%TYPE
+)
+AS
+    -- booking window violation
+    e_invalid_window      EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_invalid_window,       -20001);
+
+    -- user does not exist
+    e_user_not_found       EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_user_not_found,       -20002);
+
+    -- user is blacklisted or terminated
+    e_user_forbidden       EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_user_forbidden,       -20003);
+
+    -- facility does not exist
+    e_facility_not_found   EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_facility_not_found,   -20004);
+
+    -- timeslot does not exist
+    e_timeslot_not_found   EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_timeslot_not_found,   -20005);
+
+    -- user already has a booking today or in‑progress
+    e_user_has_booking     EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_user_has_booking,     -20006);
+
+    -- facility not AVAILABLE
+    e_not_available        EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_not_available,        -20007);
+
+    -- slot already booked
+    e_slot_unavailable     EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_slot_unavailable,     -20008);
+
+    -- timeslot already started
+    e_timeslot_started     EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_timeslot_started,     -20009);
+
+    -- participant count mismatch
+    e_participant_mismatch EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_participant_mismatch, -20010);
+
+    -- user has unpaid fine
+    e_unpaid_fine          EXCEPTION;  
+    PRAGMA EXCEPTION_INIT(e_unpaid_fine,          -20011);
+
+    -- locals
+    v_FBookingID     FacilityBooking.FBookingID%TYPE;
+    v_cnt            INTEGER;
+    v_capacity       NUMBER;
+    v_status         VARCHAR2(20);
+    v_user_status    LibraryUser.UserAccountStatus%TYPE;
+    v_slot_start     TIMESTAMP;
+
+    -- for fine checks
+    v_unpaid_count   INTEGER;
+    v_overdue_count  INTEGER;
+
+BEGIN
+    -- Booking window: today through tomorrow
+    IF p_BookingDate < TRUNC(SYSDATE)
+       OR p_BookingDate > TRUNC(SYSDATE + 1)
+    THEN
+        RAISE e_invalid_window;
+    END IF;
+
+    -- User must exist
+    SELECT COUNT(*)
+      INTO v_cnt
+      FROM LibraryUser
+     WHERE UserID = p_UserID;
+    IF v_cnt = 0 THEN
+        RAISE e_user_not_found;
+    END IF;
+
+    -- User must not be BLACKLISTED or TERMINATED
+    SELECT UserAccountStatus
+      INTO v_user_status
+      FROM LibraryUser
+     WHERE UserID = p_UserID;
+    IF v_user_status IN ('BLACKLISTED','TERMINATED') THEN
+        RAISE e_user_forbidden;
+    END IF;
+
+    -- Unpaid‐fine check (pending and no payment)
+    SELECT COUNT(*)
+      INTO v_unpaid_count
+      FROM FacilityBooking fb
+      JOIN Fine              f  ON fb.FineID = f.FineID
+     WHERE fb.UserID = p_UserID
+       AND f.FineStatus = 'PENDING'
+       AND f.PaymentID IS NULL;
+
+    IF v_unpaid_count > 0 THEN
+        -- if any overdue > 14 days --> auto‑blacklist
+        SELECT COUNT(*)
+          INTO v_overdue_count
+          FROM FacilityBooking fb
+          JOIN Fine f  ON fb.FineID = f.FineID
+         WHERE fb.UserID = p_UserID
+           AND f.FineStatus = 'PENDING'
+           AND f.PaymentID IS NULL
+           AND TRUNC(SYSDATE - f.FineDueDate) > 14;
+
+        IF v_overdue_count > 0 THEN
+            UPDATE LibraryUser
+               SET UserAccountStatus = 'BLACKLISTED'
+             WHERE UserID = p_UserID;
+            RAISE_APPLICATION_ERROR(-20012,'User has overdue unpaid fine; now BLACKLISTED.');
+        END IF;
+
+        RAISE e_unpaid_fine;
+    END IF;
+
+    -- FacilityID must exist
+    SELECT COUNT(*)
+      INTO v_cnt
+      FROM Facility
+     WHERE FacilityID = p_FacilityID;
+    IF v_cnt = 0 THEN
+        RAISE e_facility_not_found;
+    END IF;
+
+    -- TimeSlotID must exist
+    SELECT COUNT(*)
+      INTO v_cnt
+      FROM TimeSlot
+     WHERE TimeSlotID = p_TimeSlotID;
+    IF v_cnt = 0 THEN
+        RAISE e_timeslot_not_found;
+    END IF;
+
+    -- No other booking today/in‑progress
+    SELECT COUNT(*)
+      INTO v_cnt
+      FROM FacilityBooking
+     WHERE UserID = p_UserID
+       AND TRUNC(BookingDate) = TRUNC(p_BookingDate)
+       AND BookingStatus IN ('BOOKED','INPROGRESS');
+    IF v_cnt > 0 THEN
+        RAISE e_user_has_booking;
+    END IF;
+
+    -- Facility must be AVAILABLE; fetch capacity
+    SELECT Capacity, FacilityStatus
+      INTO v_capacity, v_status
+      FROM Facility
+     WHERE FacilityID = p_FacilityID;
+    IF v_status <> 'AVAILABLE' THEN
+        RAISE e_not_available;
+    END IF;
+
+    -- No overlapping booking in this slot/date
+    SELECT COUNT(*)
+      INTO v_cnt
+      FROM FacilityBooking
+     WHERE FacilityID       = p_FacilityID
+       AND TimeSlotID       = p_TimeSlotID
+       AND TRUNC(BookingDate) = TRUNC(p_BookingDate)
+       AND BookingStatus IN ('BOOKED','INPROGRESS');
+    IF v_cnt > 0 THEN
+        RAISE e_slot_unavailable;
+    END IF;
+
+    -- For bookings today: slot start must be ≥ now
+    SELECT TO_TIMESTAMP(
+             TO_CHAR(p_BookingDate,'YYYY-MM-DD') || ' ' ||
+             TO_CHAR(StartTime,'HH24:MI:SS'),
+             'YYYY-MM-DD HH24:MI:SS'
+           )
+      INTO v_slot_start
+      FROM TimeSlot
+     WHERE TimeSlotID = p_TimeSlotID;
+
+    IF TRUNC(p_BookingDate) = TRUNC(SYSDATE)
+       AND v_slot_start < SYSTIMESTAMP
+    THEN
+        RAISE e_timeslot_started;
+    END IF;
+
+    -- Participants must match room capacity exactly
+    IF p_NumberOfParticipants <> v_capacity THEN
+        RAISE e_participant_mismatch;
+    END IF;
+
+    --Generate new Booking ID and INSERT
+    --(omit BookingStatus – trigger/default will set it)
+    v_FBookingID := 'FB' || LPAD(seq_FBooking.NEXTVAL,5,'0');
+
+    INSERT INTO FacilityBooking (
+      FBookingID,
+      UserID,
+      FacilityID,
+      TimeSlotID,
+      FineID,
+      BookingDate,
+      CheckInTime,
+      CheckOutTime,
+      FacilityPostUsageCondition,
+      NumberOfParticipants
+    ) VALUES (
+      v_FBookingID,
+      p_UserID,
+      p_FacilityID,
+      p_TimeSlotID,
+      NULL,
+      p_BookingDate,
+      NULL,
+      NULL,
+      NULL,
+      p_NumberOfParticipants
+    );
+
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('Booking inserted successfully: ' || v_FBookingID);
+
+EXCEPTION
+  WHEN e_invalid_window THEN
+    RAISE_APPLICATION_ERROR(-20001,'Bookings are only allowed from today through tomorrow.');
+
+  WHEN e_user_not_found THEN
+    RAISE_APPLICATION_ERROR(-20002,'UserID '||p_UserID||' does not exist.');
+
+  WHEN e_user_forbidden THEN
+    RAISE_APPLICATION_ERROR(-20003,'User '||p_UserID||' is BLACKLISTED or TERMINATED - cannot book.');
+
+  WHEN e_unpaid_fine THEN
+    RAISE_APPLICATION_ERROR(-20011,'User has unpaid pending fine - cannot book.');
+
+  WHEN e_facility_not_found THEN
+    RAISE_APPLICATION_ERROR(-20004,'FacilityID '||p_FacilityID||' does not exist.');
+
+  WHEN e_timeslot_not_found THEN
+    RAISE_APPLICATION_ERROR(-20005,'TimeSlotID '||p_TimeSlotID||' does not exist.');
+
+  WHEN e_user_has_booking THEN
+    RAISE_APPLICATION_ERROR(-20006,'User already has a booking on '||TO_CHAR(p_BookingDate,'YYYY-MM-DD')||'.');
+
+  WHEN e_not_available THEN
+    RAISE_APPLICATION_ERROR(-20007,'Facility '||p_FacilityID||' is not AVAILABLE.');
+
+  WHEN e_slot_unavailable THEN
+    RAISE_APPLICATION_ERROR(-20008,'TimeSlot '||p_TimeSlotID||' already booked for this facility.');
+
+  WHEN e_timeslot_started THEN
+    RAISE_APPLICATION_ERROR(-20009,'Cannot book a slot that has already started.');
+
+  WHEN e_participant_mismatch THEN
+    RAISE_APPLICATION_ERROR(-20010,'Participants must equal room capacity of '||v_capacity||'.');
+
+  WHEN OTHERS THEN
+    RAISE_APPLICATION_ERROR(-20099,'Unexpected error '||SQLCODE||': '||SUBSTR(SQLERRM,1,200));
+END InsertBooking;
+/

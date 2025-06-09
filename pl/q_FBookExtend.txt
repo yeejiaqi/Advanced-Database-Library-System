@@ -1,0 +1,37 @@
+-- View
+CREATE OR REPLACE VIEW v_BookFrequentlyExtend AS
+SELECT 
+    b.BookTitle, 
+    bd.BookCopyID, 
+    b.BorrowDate, 
+    TRUNC(bd.LatestBookLoanDueDate - bd.OriBookLoanDueDate) AS ExtendedDay
+FROM BorrowDetails bd
+JOIN Borrow b ON bd.BorrowID = b.BorrowID
+JOIN BookCopy bc ON bd.BookCopyID = bc.BookCopyID
+JOIN Book b ON bc.BookID = b.BookID
+WHERE bd.LatestBookLoanDueDate > bd.OriBookLoanDueDate;
+
+-- Display
+SET LINESIZE 74
+SET PAGESIZE 30
+
+BREAK ON BorrowYear SKIP 1
+COLUMN BorrowYear FORMAT 9999 HEADING 'Year'
+COLUMN BookTitle FORMAT A35 HEADING 'Book Title'
+COLUMN TotalExtendedDays FORMAT 999 HEADING 'Extended Days'
+COLUMN NumberOfExtensions FORMAT 999 HEADING 'Total Extend Count'
+COMPUTE SUM LABEL 'Total' OF NumberOfExtensions ON BorrowYear
+
+TTITLE CENTER 'Books Frequently Extended' -
+       RIGHT 'Page ' FORMAT 999 SQL.PNO SKIP 2
+
+SELECT 
+    EXTRACT(YEAR FROM BorrowDate) AS BorrowYear,
+    BookTitle, 
+    SUM(ExtendedDay) AS TotalExtendedDays,
+    ROUND(SUM(ExtendedDay) / 7, 2) AS NumberOfExtensions
+FROM v_BookFrequentlyExtend
+GROUP BY EXTRACT(YEAR FROM BorrowDate), BookTitle
+ORDER BY BorrowYear, SUM(ExtendedDay) DESC;
+
+TTITLE OFF

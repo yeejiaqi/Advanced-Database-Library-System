@@ -1,0 +1,26 @@
+CREATE OR REPLACE TRIGGER TRG_UPT_LATE_FINE_ISSUING
+AFTER UPDATE OF FineReason ON Fine
+FOR EACH ROW
+DECLARE
+   v_fineID Fine.FineID%TYPE;
+BEGIN
+   IF :new.FineReason LIKE '%+LATE_FINE_REPAY' AND :old.FineReason NOT LIKE '%+LATE_FINE_REPAY' THEN
+      BEGIN
+         SELECT FineID INTO v_fineID
+         FROM LatePaymentAudit
+         WHERE FineID = :new.FineID AND TRUNC(RecalculateDate) = TRUNC(SYSDATE);
+
+         UPDATE LatePaymentAudit 
+         SET OldFineCharged = :old.FineCharged,
+             NewFineCharged = :new.FineCharged,
+             OldFineReason = :old.FineReason,
+             NewFineReason = :new.FineReason
+         WHERE FineID = :new.FineID AND TRUNC(RecalculateDate) = TRUNC(SYSDATE);
+      EXCEPTION
+         WHEN NO_DATA_FOUND THEN
+            INSERT INTO LatePaymentAudit 
+            VALUES (:new.FineID, DEFAULT, :old.FineCharged, :new.FineCharged, :old.FineReason, :new.FineReason);
+      END;
+   END IF;
+END;
+/

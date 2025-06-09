@@ -1,0 +1,35 @@
+CREATE OR REPLACE TRIGGER t_AfterReturn
+AFTER UPDATE OF ReturnDate ON BorrowDetails
+FOR EACH ROW
+DECLARE
+    v_RCondition VARCHAR2(8);
+    v_OBStatus VARCHAR2(16);
+    v_NBStatus VARCHAR2(16);
+BEGIN
+
+    -- get ori book status from book copy
+    SELECT BookStatus
+    INTO v_OBStatus
+    FROM BookCopy
+    WHERE BookCopyID = :OLD.BookCopyID;
+
+    -- get the return condition
+    v_RCondition := :NEW.ReturnCondition;
+
+    IF v_RCondition = 'GOOD' THEN 
+        IF v_OBStatus = 'RESERVED' THEN 
+            v_NBStatus := 'RESERVED';
+        ELSE
+            v_NBStatus := 'AVAILABLE';
+        END IF;
+    ELSIF (v_RCondition = 'LIGHTDMG' OR v_RCondition = 'HEAVYDMG') THEN
+        v_NBStatus := 'UNDERMAINTENANCE';
+    ELSE -- LOST
+        v_NBStatus := 'UNAVAILABLE';
+    END IF;
+
+    UPDATE BookCopy
+    SET BookStatus = v_NBStatus, BookCondition = :NEW.ReturnCondition
+    WHERE BookCopyID = :OLD.BookCopyID;
+END;
+/

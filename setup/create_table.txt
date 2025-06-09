@@ -1,0 +1,27 @@
+DROP TABLE BorrowDetails;
+DROP TABLE Borrow;
+DROP TABLE ReserveDetails;
+DROP TABLE Reserve;
+DROP TABLE FacilityBooking;
+DROP TABLE Facility;
+DROP TABLE MembershipActivity;
+DROP TABLE Fine;
+DROP TABLE Payment;
+DROP TABLE TimeSlot;
+DROP TABLE BookCopy;
+DROP TABLE Book;
+DROP TABLE LibraryUser;
+
+@user.txt
+@timeslot.txt
+@payment.txt
+@membership.txt
+@fine.txt
+@book.txt
+@bookCopy.txt
+@borrow.txt
+@borrowDetails.txt
+@reserve.txt
+@reserveDetails.txt
+@facility.txt
+@facilityBooking.txt

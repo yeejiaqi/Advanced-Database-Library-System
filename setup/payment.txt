@@ -1,0 +1,9 @@
+DROP TABLE Payment;
+CREATE TABLE Payment(
+        PaymentID       CHAR(7)     NOT NULL,
+        PaymentMethod   VARCHAR2(8)     NOT NULL,
+        PaymentDate     DATE        DEFAULT SYSDATE     NOT NULL,
+        CONSTRAINT chk_payment_pk PRIMARY KEY(PaymentID),
+        CONSTRAINT chk_payment_paymentID CHECK (REGEXP_LIKE(PaymentID, '^PY([0-9]{5})+$')),
+        CONSTRAINT chk_paymentMethod CHECK (PaymentMethod IN ('CASH','CARD','BANK','E-WALLET'))
+);

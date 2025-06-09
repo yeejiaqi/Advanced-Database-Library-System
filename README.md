@@ -1,1 +1,1 @@
-# Advanced-Database-Library-System
+Advanced Database Management for library management system is a unified, enterprise-grade solution that streamlines both traditional library services and facility reservations. It enables users to effortlessly book rooms with time-slot scheduling, participant limits, and dynamic status tracking (BOOKED, INPROGRESS, COMPLETED, etc.). Built on a robust relational database, the system enforces data integrity through interlinked tables and rules for check-in/check-out logic, post-use conditions, and automated fine handling.
